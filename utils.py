@@ -1,75 +1,6 @@
-import numpy as np
-from scipy.sparse.linalg import eigs
 import matplotlib.pyplot as plt
 import random
 
-
-
-def getPCA(X: np.ndarray, k: int):
-    # TODO: Make this normalize and return normalization data for the transforms because I keep forgetting to do it myself
-    """
-    Returns PCA using SVD from a dataset X with dimensions as columns and samples as rows. 
-    
-    X: An array of data with shape (DIMENSIONS, SAMPLES)
-    
-    k: How many components to produce
-    
-    Returns W, Z
-    
-    W: The feature matrix computed from PCA slide 18
-    
-    Z: The weights matrix computed from W @ X
-    """
-
-    covariance = np.cov(X)
-    covariance = 1/2 * (covariance + covariance.T)
-
-    eigenvalues, eigenvectors = eigs(covariance, k=k)
-
-    # Convert to real numbers
-    eigenvalues = np.real(eigenvalues)
-    eigenvectors = np.real(eigenvectors)
-
-    # W is the feature matrix
-    W = np.dot(np.linalg.inv(np.diag(np.sqrt(eigenvalues))), eigenvectors.T)
-    # W = np.abs(W)
-
-    # Z is the weights matrix
-    Z = W @ X
-
-    # identityMatrix = W @ covariance @ W.T
-
-    U = eigenvectors
-
-    # reconstruction = np.linalg.pinv(W) @ Z
-
-    return W, Z
-
-
-
-def plotSubplots(data, superTitle, subplotTitle, subplotShape, plotType, figsize=(5, 5), rows=3, customSubplotNames=False):
-    
-    PLOT_COUNT = rows**2
-    
-    plt.figure(figsize=figsize)
-    plt.subplots_adjust(hspace=0.2)
-    plt.suptitle(superTitle)
-    for i in range(PLOT_COUNT):
-        axes = plt.subplot(rows, rows, i + 1)
-        
-        reshaped = np.reshape(data[:,i], subplotShape, 'F')
-        
-        if plotType == 'imshow':
-            axes.imshow(reshaped)
-        if plotType == 'plot':
-            axes.plot(range(data.shape[0]), reshaped)
-            
-        if customSubplotNames:
-            axes.set_title(f'{subplotTitle[i]}'), axes.set_xticks([]), axes.set_yticks([])
-        else:
-            axes.set_title(f'{subplotTitle}[{i}]'), axes.set_xticks([]), axes.set_yticks([])
-    plt.show()
-    
 
 
 
@@ -115,4 +46,20 @@ def displayImageGrid(images: list, H: int, W: int=0, shuffle=False, figsize=None
 
     plt.subplots_adjust(wspace=0, hspace=0)
     plt.show()
+
+
+
+
+def readWavFiles(directory: str) -> list:
+    
+    
+    readFiles = None
+    
+    
+    
+    
+    return readFiles
+    
+    
+
 
