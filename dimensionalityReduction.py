@@ -29,7 +29,7 @@ def normalizeData(data: np.ndarray):
 
 
 
-def getPCA(X: np.ndarray, k: int):
+def getPCA(X: np.ndarray, dims: int):
     
     """
     Returns PCA using SVD from a dataset X with dimensions as columns and samples as rows. 
@@ -52,7 +52,7 @@ def getPCA(X: np.ndarray, k: int):
     covariance = np.cov(normalizedX)
     covariance = 1/2 * (covariance + covariance.T)
 
-    eigenvalues, eigenvectors = eigs(covariance, k=k)
+    eigenvalues, eigenvectors = eigs(covariance, k=dims)
 
     # Convert to real numbers
     eigenvalues = np.real(eigenvalues)
@@ -72,45 +72,7 @@ def getPCA(X: np.ndarray, k: int):
 
 
 
-# def getNMFParameters(X, R):
-    
-#     # TODO: Rewrite the whole NMF process to not even need this function, instead default arguments should be passed into getNMF()
-#     """
-#     A helper function that returns the randomly generated weights W, and H based on the number of features you want and the data.
-#     Also returns other parameters for the NMF process such as iterations and a non-zero value.
-    
-#     X: The data with columns of dimensions and rows of samples
-    
-#     R: The number of parameters you want back
-    
-#     Returns:
-    
-#     W: The vertical information about X
-    
-#     H: The horizontal information about X
-        
-#     NZ: A small non-zero value that exists to prevent division by 0.
-#     """
-    
-#     M = X.shape[0]
-#     N = X.shape[1]
-
-#     # W contains synthesis features and has shape (M x R) where R is the low rank dimensionality
-#     W = np.random.rand(M, R)
-
-#     # H contains the activations of the synthesis features and has dimensions (R x N)
-#     H = np.random.rand(R, N)
-
-#     # Look at ICA/NMF slides 41-43 for the "algorithm"
-
-#     # Not zero, a small value to prevent divide by 0
-#     NZ = 1e-5
-    
-#     return W, H, NZ
-
-
-
-def getNMF(X: np.ndarray, R: int, ITERATIONS=200, optimizationMethod='KL', eps=1e-5):
+def getNMF(X: np.ndarray, R: int, iterations:int=200, optimizationMethod='KL', eps:float=1e-5):
 
     """
     Returns the NMF factored matrices W and H from a given dataset X and features R. Note that X doesn't need to be normalized for NMF to work.
@@ -128,7 +90,7 @@ def getNMF(X: np.ndarray, R: int, ITERATIONS=200, optimizationMethod='KL', eps=1
     """
 
 
-    def NMFUpdateKLDiv(X, W, H, eps):
+    def NMFUpdateKLDiv(X:np.ndarray, W:np.ndarray, H:np.ndarray, eps:float):
         
         """
         Performs a single update of W and H parameters using the KL divergence based update rule
@@ -160,7 +122,7 @@ def getNMF(X: np.ndarray, R: int, ITERATIONS=200, optimizationMethod='KL', eps=1
 
         return W, H
 
-    def NMFUpdateEuclidean(X, W, H, eps):
+    def NMFUpdateEuclidean(X:np.ndarray, W:np.ndarray, H:np.ndarray, eps:float):
         
         """
         Performs a single update of W and H parameters using the matrix-based update rule based on Euclidean distance
@@ -198,10 +160,55 @@ def getNMF(X: np.ndarray, R: int, ITERATIONS=200, optimizationMethod='KL', eps=1
     H = np.random.rand(R, samples)
     
 
-    for i in range(ITERATIONS):
+    for i in range(iterations):
         if optimizationMethod == 'KL':
             W, H = NMFUpdateKLDiv(X, W, H, eps)
         elif optimizationMethod == 'EU':
             W, H = NMFUpdateEuclidean(X, W, H, eps)
             
     return W, H
+
+
+
+def getICA(X:np.ndarray, lr:float=1e-3, iterations:int=400):
+    
+    """
+    Perform Independent Component Analysis on a data matrix X
+    
+    Arguments:
+        X: A data matrix in the shape (DIMENSIONS, SAMPLES)
+        lr: The learning rate for the gradient descent algorithm for ICA
+        iterations: How many iterations should be performed
+        
+    Returns:
+        W_ICA: The learned weights used to transform new data to the same space
+        Z_ICA: The data transformed by the ICA matrix which is just W_ICA @ X
+    """
+
+    # Initialize random weights as identity matrix since we don't want to do another linear transform on top of ICA
+    W_ICA = np.eye(X.shape[0])
+
+    # LW = np.random.rand(X.shape[0], X.shape[0])
+
+    # differences = []
+    for i in range(iterations):
+        
+        # Adaptive learning rate and a lot of training to ensure convergence
+        lr = lr/(i+1)
+        
+        y = W_ICA @ X
+
+        gradW = (X.shape[0]*np.eye(W_ICA.shape[0]) - 2*np.tanh(y) @ y.T) @ W_ICA
+        W_ICA += lr * gradW
+        
+        # Save the SSD between y and weights @ Z for each iteration to make sure we are converging
+        # This is a bit of a hack, we really need to plot the loss of the infomax function and see if that actually converges or decreases. 
+        # differences.append((np.sum(y - LW @ X))**2)
+
+    # plt.plot(differences)
+    # plt.title('ICA "loss" convergence')
+    # plt.show()
+
+    Z_ICA = W_ICA @ X
+    
+    return W_ICA, Z_ICA

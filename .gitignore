@@ -1,6 +1,15 @@
-data/IRMAS-TestingData-Part1
-data/IRMAS-TestingData-Part2
-data/IRMAS-TestingData-Part3
-data/IRMAS-TrainingData
+data/IRMAS-TestingData-Part1/Part1
+!data/IRMAS-TestingData-Part1/README.txt
+
+data/IRMAS-TestingData-Part2/Part2
+!data/IRMAS-TestingData-Part2/README.txt
+
+data/IRMAS-TestingData-Part3/Part3
+!data/IRMAS-TestingData-Part3/README.txt
+
+data/IRMAS-TrainingData/*
+!data/IRMAS-TrainingData/README.txt
+
+data/good-sounds
 
 *.zip
