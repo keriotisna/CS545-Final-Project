@@ -13,3 +13,4 @@ data/IRMAS-TrainingData/*
 data/good-sounds
 
 *.zip
+.vscode/settings.json
