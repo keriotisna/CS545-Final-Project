@@ -11,5 +11,6 @@ data/IRMAS-TrainingData/*
 !data/IRMAS-TrainingData/README.txt
 
 data/good-sounds
+!data/good-sounds/README.txt
 
 *.zip
