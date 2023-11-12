@@ -15,6 +15,6 @@ data/good-sounds
 !data/good-sounds/README.txt
 
 __pycache__/
-
 *.zip
 *.pyc
+.vscode/settings.json
