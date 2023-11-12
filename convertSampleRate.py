@@ -30,6 +30,8 @@ def parse_arguments():
 
 
 if __name__ == "__main__":
+# Usage: python3 convertSampleRate.py input_dir output_dir
+
     args = parse_arguments()
     source_folder = args.source_folder
     target_folder = args.target_folder
