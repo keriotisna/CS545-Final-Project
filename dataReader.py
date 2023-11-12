@@ -6,7 +6,7 @@ from collections import defaultdict
 
 
 # TODO: Add an instrument argument to only read from certain instrument folders, as the memory requirements for good-sounds is a lot
-def getDataset(directory:str, toMonoAudio=True, datasetName=None) -> tuple[dict, dict]:
+def getDataset(directory:str, datasetName, instruments, toMonoAudio=True) -> tuple[dict, dict]:
 
     """
     Reads an entire directory for .wav files and reads them into a usable format. Also includes information about sample rates if downsampling is needed.
@@ -43,6 +43,10 @@ def getDataset(directory:str, toMonoAudio=True, datasetName=None) -> tuple[dict,
 
     # Walk through all directories and files in the top directory
     for root, dirs, files in os.walk(directory):
+        directoryParts = root.split(os.sep)
+        # Ignore directories not related to valid instruments
+        if len(set(directoryParts).intersection(set(instruments))) == 0:
+            continue
         for file in files:
             if file.endswith(".wav"):
                 # Construct the full file path
