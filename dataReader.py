@@ -3,7 +3,7 @@ import os
 from scipy.io import wavfile
 from collections import defaultdict
 
-
+SAMPLE_PATH = 'data\\vl1.wav'
 
 # TODO: Add an instrument argument to only read from certain instrument folders, as the memory requirements for good-sounds is a lot
 def getDataset(directory:str, datasetName, instruments, toMonoAudio=True) -> tuple[dict, dict]:

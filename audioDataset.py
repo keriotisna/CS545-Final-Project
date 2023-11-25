@@ -4,6 +4,7 @@ import os
 from scipy.signal import stft # https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.stft.html
 from collections import defaultdict
 from itertools import chain
+from dimensionalityReduction import decomposeAudioSKLearn
 
 # TODO: How to handle different sample rates between datasets? need to downsample to lowest sample rate. liberosa lets us do this I think?
 # TODO: Create full spectrogram function which may be more efficient. createSpectrogramsIndependent makes a spectrogram for each point individually, 
@@ -42,7 +43,12 @@ class AudioDataset():
     VALID_GOOD_SOUNDS_INSTRUMENTS = ['bass_alejandro_recordings', 'cello_margarita_attack', 'cello_margarita_dynamics_stability', 'cello_margarita_open_strings', 'cello_margarita_pitch_stability', 'cello_margarita_reference', 'cello_margarita_timbre_richness', 'cello_margarita_timbre_stability', 'cello_nico_improvement_recordings', 'clarinet_gener_evaluation_recordings', 'clarinet_gener_improvement_recordings', 'clarinet_marti_evaluation_recordings', 'clarinet_pablo_air', 'clarinet_pablo_attack', 'clarinet_pablo_dynamics_stability', 'clarinet_pablo_pitch_stability', 'clarinet_pablo_reference', 'clarinet_pablo_richness', 'clarinet_pablo_timbre_stability', 'clarinet_scale_gener_recordings', 'flute_almudena_air', 'flute_almudena_attack', 'flute_almudena_dynamics_change', 'flute_almudena_evaluation_recordings', 'flute_almudena_reference', 'flute_almudena_reference_piano', 'flute_almudena_stability', 'flute_almudena_timbre', 'flute_josep_evaluation_recordings', 'flute_josep_improvement_recordings', 'flute_scale_irene_recordings', 'oboe_marta_recordings', 'piccolo_irene_recordings', 'saxo_bariton_raul_recordings', 'saxo_raul_recordings', 'saxo_soprane_raul_recordings', 'saxo_tenor_iphone_raul_recordings', 'saxo_tenor_raul_recordings', 'sax_alto_scale_2_raul_recordings', 'sax_alto_scale_raul_recordings', 'sax_tenor_tenor_scales_2_raul_recordings', 'sax_tenor_tenor_scales_raul_recordings', 'trumpet_jesus_evaluation_recordings', 'trumpet_jesus_improvement_recordings', 'trumpet_ramon_air', 'trumpet_ramon_attack_stability', 'trumpet_ramon_dynamics_stability', 'trumpet_ramon_evaluation_recordings', 'trumpet_ramon_pitch_stability', 'trumpet_ramon_reference', 'trumpet_ramon_timbre_stability', 'trumpet_scale_jesus_recordings', 'violin_laia_improvement_recordings', 'violin_laia_improvement_recordings_2', 'violin_raquel_attack', 'violin_raquel_dynamics_stability', 'violin_raquel_pitch_stability', 'violin_raquel_reference', 'violin_raquel_richness', 'violin_raquel_timbre_stability', 'violin_violin_scales_laia_recordings']
     VALID_GENERAL_GOOD_SOUNDS_INSTRUMENTS = list(GENERAL_INSTRUMENT_DICTIONARIES['good-sounds'].keys())
     
-    def __init__(self, datasetName:str, instruments:list=None, useGeneralInstruments=False):
+    def __init__(self, datasetName:str, instruments:list=None, useGeneralInstruments=False,
+                 spectrogramKwargs:dict={
+                    'window': 'hann',
+                    'nperseg': 1024,
+                    'noverlap': 768, 
+                 }):
         
         """
         Arguments:
@@ -54,28 +60,29 @@ class AudioDataset():
                 VALID_IRMAS_INSTRUMENTS = ['cel', 'cla', 'flu', 'gac', 'gel', 'org', 'pia', 'sax', 'tru', 'vio', 'voi']
                 
                 VALID_GENERAL_GOOD_SOUNDS_INSTRUMENTS = ['bas', 'cel', 'cla', 'flu', 'obo', 'pic', 'sax', 'tru', 'vio']
+                
+            spectrogramKwargs: A kwarg dictionary for the scipy stft function. This will ensure every spectrogram is consistent across datasets and instances
         """
         
         assert datasetName in self.VALID_DATASETS
         
-        self.datasetName = datasetName        
+        self.datasetName = datasetName
+        self.spectrogramKwargs = spectrogramKwargs
         
         match self.datasetName:
             case 'IRMAS':
-                self.setIRMASInstruments(instruments)
+                self._setIRMASInstruments(instruments)
                 self.audioData, self.sampleRateDict = getDataset(self.IRMAS_TRAINING_DATA_PATH, self.datasetName, self.instruments, toMonoAudio=True)
 
             case 'good-sounds':
-                self.setGoodSoundsInstruments(instruments, useGeneralInstruments)
+                self._setGoodSoundsInstruments(instruments, useGeneralInstruments)
                 self.audioData, self.sampleRateDict = getDataset(self.GOOD_SOUNDS_TRAINING_DATA_PATH, self.datasetName, self.specificInstruments, toMonoAudio=True)
                 if useGeneralInstruments:
-                    # TODO: Merge common instruments here
-                    self.mergeInstruments()
-                    pass
+                    self._mergeInstruments()
 
 
 
-    def mergeInstruments(self):
+    def _mergeInstruments(self):
         
         """
         Merges keys in the audioData and sampleRateDict according to the GENERAL_INSTRUMENT_DICTIONARIES for the current dataset.
@@ -123,7 +130,7 @@ class AudioDataset():
         pass
 
 
-    def setIRMASInstruments(self, instruments):
+    def _setIRMASInstruments(self, instruments):
 
         """
         Sets current instruments during initialization. Should only be called during initialization
@@ -143,7 +150,7 @@ class AudioDataset():
         
         
         
-    def setGoodSoundsInstruments(self, instruments, useGeneralInstruments):
+    def _setGoodSoundsInstruments(self, instruments, useGeneralInstruments):
         
         """
         Sets current instruments during initialization. Should only be called during initialization
@@ -162,7 +169,7 @@ class AudioDataset():
             else:
                 assert set(instruments).issubset(set(self.VALID_GENERAL_GOOD_SOUNDS_INSTRUMENTS)), f'Invalid instrument specified, valid instruments are {self.VALID_GENERAL_GOOD_SOUNDS_INSTRUMENTS}, given instruments were {instruments}'
                 
-                specificInstruments = self.getInstrumentsFromGeneralInstruments(instruments)
+                specificInstruments = self._getInstrumentsFromGeneralInstruments(instruments)
                 self.instruments = instruments
                 self.specificInstruments = specificInstruments
                 
@@ -175,7 +182,7 @@ class AudioDataset():
 
         
         
-    def getInstrumentsFromGeneralInstruments(self, instruments) -> list:
+    def _getInstrumentsFromGeneralInstruments(self, instruments) -> list:
         
         """
         Translates a list of general instruments to specific instruments that can be used to read the correct folders in getDataset()
@@ -216,6 +223,15 @@ class AudioDataset():
         else:
             raise AttributeError('Spectrogram attribute not initialized, please call a createSpectrograms() function first')
         
+    def getPhases(self) -> dict:
+        if hasattr(self, 'phases'):
+            return self.phases
+        else:
+            raise AttributeError('Phase attribute not initialized, please call a createSpectrograms() function first')
+        
+    def getSpectrogramKwargs(self):
+        return self.spectrogramKwargs
+        
     def deleteAudioData(self) -> None:
         """
         Sets self.audioData to None to clear it from memory
@@ -224,52 +240,141 @@ class AudioDataset():
         del self.audioData
         
     
-    def createSpectrogramsIndependent(self, window='hann', nperseg=1024, noverlap=3/4, deleteAudioData=False):
+    
+
+
+    def getMagnitudeSpectrogram(self, data:np.ndarray, fs:int) -> np.ndarray:
+        
+        """
+        Gets a magnitude spectrogram of wav file data given a sample rate and kwargs set in self.spectrogramKwargs
+        
+        Arguments:
+            data: A numpy array that represents the raw wavfile read data
+            fs: The sample rate of the wav data
+            
+        Returns:
+            magnitude: A magnitude spectrogram of the given data using kwargs stored in self.spectrogramKwargs
+        """
+        
+        def clipSpectrogram(spec):
+            return np.clip(np.log(np.abs(spec)), a_min=0, a_max=np.inf).astype(np.float32)
+        
+        return clipSpectrogram(stft(data, fs=fs, **self.spectrogramKwargs)[-1])
+    
+    
+    def getMagnitudePhaseSpectrogram(self, data:np.ndarray, fs:int) -> tuple[np.ndarray, np.ndarray]:
+        
+        """
+        Gets a magnitude and phase spectrogram of wav file data given a sample rate and kwargs set in self.spectrogramKwargs
+        
+        Arguments:
+            data: A numpy array that represents the raw wavfile read data
+            fs: The sample rate of the wav data
+            
+        Returns:
+        (magnitude, phase)
+            magnitude: A magnitude spectrogram of the given data using kwargs stored in self.spectrogramKwargs
+            phase: A phase spectrogram of the given data using the kwargs stored in self.spectrogramKwargs
+        """
+        
+        def clipSpectrogram(spec):
+            return np.clip(np.log(np.abs(spec)), a_min=0, a_max=np.inf).astype(np.float32)
+        
+        spec = stft(data, fs=fs, **self.spectrogramKwargs)[-1]
+        
+        # (magnitude, phase)
+        return clipSpectrogram(spec), np.angle(spec)
+    
+        
+    def createSpectrogramsIndependent(self, deleteAudioData=False):
         """
         Set the class variable spectrogram to a similarly structured dictionary with values as the spectrograms produced by each individual sample
+        
+        Sets class variables self.spectrograms and self.phases
+        
         IMPORTANT: This will delete the audioData attribute to try and save memory as data is read
         
         Arguments:
-            window='hann': The window to be used for spectrogram creation
-            nperseg=1024: The nperseg argument for the spectrogram. Equivalent to window size
-            noverlap=3/4: The fraction of overlap there should be between each window
             deleteAudioData=False: Whether or not audioData should be deleted as spectrograms are created to save memory
         """
 
-        def clipSpectrogram(spec):
-            return np.clip(np.log(np.abs(spec)), a_min=0, a_max=np.inf)
-
-        def getSpectrogram(data, sampleRate):
-            return clipSpectrogram(stft(data, fs=sampleRate, window=window, nperseg=nperseg, noverlap=int(noverlap*nperseg))[-1])
-        
         self.spectrograms = {}
+        self.phases = {}
 
         for instrument, currentInstrumentData in self.audioData.items():
             
             currentSampleRates = self.sampleRateDict[instrument]
             assert len(currentInstrumentData) == len(currentSampleRates)
             spectrograms = []
-        
+            phases = []
+            # Replace audiodata in place with spectrograms
             if deleteAudioData:
                 for idx, (data, sampleRate) in enumerate(zip(currentInstrumentData, currentSampleRates)):
-                    spectrogram = getSpectrogram(data, sampleRate)
-                    self.audioData[instrument][idx] = spectrogram
+                    mag, phase = self.getMagnitudePhaseSpectrogram(data, sampleRate)
+                    self.audioData[instrument][idx] = mag
+                    phases.append(phase)
                     
-                self.spectrograms = self.audioData
-                self.audioData = None
 
+            # Create spectrograms without replacing audioData
             else:
                 for idx, (data, sampleRate) in enumerate(zip(currentInstrumentData, currentSampleRates)):
-                    spectrogram = getSpectrogram(data, sampleRate)
+                    spectrogram = self.getMagnitudeSpectrogram(data, sampleRate)
                     spectrograms.append(spectrogram)
                     
                 self.spectrograms[instrument] = spectrograms
+                
+            # Phases will be completely new for each instrument, so we always do this regardless of deleting audio data
+            self.phases[instrument] = phases
 
-            # List comprehension isn't much faster here
-            # spectrograms = [clipSpectrogram(stft(data, fs=sampleRate, window=window, nperseg=nperseg, noverlap=int(noverlap*nperseg))[-1]) for data, sampleRate in zip(currentInstrumentData, currentSampleRates)]
+        if deleteAudioData:
+            self.spectrograms = self.audioData
+            self.deleteAudioData()
 
+
+
+    # TODO: Delete old spectrograms?
+    # TODO: Do dimensionality reduction on basis functione beforehand? But would this make sense and how would we go back and forth?
+    def getBasisFunctions(self) -> tuple[np.ndarray, dict]:
+        
+        """
+        Gets a set of all basis functions from created spectrograms by concatenating them all together. Additionally
+        returns a dictionary containing the length of each instrument's spectrograms so they can be identified later
+
+        Returns:
+            (basisFunctions, indexDict)
+            basisFunctions: A numpy array of shape (DIMS, SAMPLES) which holds the concatenated spectrograms for all instruments in self.spectograms
+            indexDict: A dictionary with keys of instrument names and values of ints which represents how many spectrogram frames are contained by each instrument
+        """
+        
+        indexDict = {}
+        allData = None
+        for instrumentName, data in self.spectrograms.items():
             
-
+            concatenatedData = np.concatenate(data, axis=1)
+            
+            if allData is None:
+                allData = concatenatedData
+            else:
+                allData = np.concatenate((allData, concatenatedData), axis=1)
+            
+            # TODO: Remove columns with low energy to reduce size
+            
+            # Store how long the current data array was so we can navigate it
+            indexDict[instrumentName] = concatenatedData.shape[-1]
+                    
+        return allData, indexDict
+    
+    
+    def runNMFAudioDecomposition(self, X:np.ndarray):
+        
+        # Combine all spectrogram data into a large array that can be used for NMF as a basis function array. 
+        basisFunctions, indexDict = self.getBasisFunctions()
+        
+        W_NMF, H_NMF = decomposeAudioSKLearn(X=X, W=basisFunctions, H=None)
+        
+        
+        
+        pass
             
 
 

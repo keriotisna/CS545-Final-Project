@@ -14,6 +14,8 @@ data/IRMAS-TrainingData/*
 data/good-sounds
 !data/good-sounds/README.txt
 
+uniform-SR-data/*
+
 __pycache__/
 *.zip
 *.pyc
