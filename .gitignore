@@ -14,9 +14,13 @@ data/IRMAS-TrainingData/*
 data/good-sounds
 !data/good-sounds/README.txt
 
+data/nsynth*
+
 uniform-SR-data/*
 
 __pycache__/
 *.zip
 *.pyc
+*.tar
+*.gz
 .vscode/settings.json

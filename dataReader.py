@@ -6,14 +6,16 @@ from collections import defaultdict
 SAMPLE_PATH = 'data\\vl1.wav'
 
 # TODO: Add an instrument argument to only read from certain instrument folders, as the memory requirements for good-sounds is a lot
-def getDataset(directory:str, datasetName, instruments, toMonoAudio=True) -> tuple[dict, dict]:
+def getDataset(directory:str, datasetName, instruments, toMonoAudio=True, **kwargs) -> tuple[dict, dict]:
 
     """
     Reads an entire directory for .wav files and reads them into a usable format. Also includes information about sample rates if downsampling is needed.
+    Data directories should be structured as directory > instrument_name(s) > wavfiles
     
     Arguments:
         directory: str: The directory of the top level folder which holds the current dataset.
         toMonoAudio=True: Whether or not read wav audio should be converted to mono in the result (Usually, yes)
+        kwargs: Key word arguments that can be passed if anything fancy needs to happen here without needing to re-write everything
     
 
     Returns:
@@ -27,16 +29,46 @@ def getDataset(directory:str, datasetName, instruments, toMonoAudio=True) -> tup
         
         # Identify the instrument directory name (assuming it's the second level directory)
         directoryParts = root.split(os.sep)
-        if datasetName == 'good-sounds':
-            instrumentName = directoryParts[-2]
-            audioDict[instrumentName].append(data)
-            sampleRateDict[instrumentName].append(rate)
-            return
-        elif datasetName == 'IRMAS':
-            instrumentName = directoryParts[-1]
-            audioDict[instrumentName].append(data)
-            sampleRateDict[instrumentName].append(rate)
-            return
+        
+        # Add more datasets as needed
+        match datasetName:
+            case 'IRMAS':
+                instrumentName = directoryParts[-1]
+                audioDict[instrumentName].append(data)
+                sampleRateDict[instrumentName].append(rate)
+                return
+            case 'good-sounds':
+                instrumentName = directoryParts[-2]
+                audioDict[instrumentName].append(data)
+                sampleRateDict[instrumentName].append(rate)
+                return
+            case 'nsynth-valid':
+                instrumentName = directoryParts[-1]
+                audioDict[instrumentName].append(data)
+                sampleRateDict[instrumentName].append(rate)
+                return
+
+
+    def shouldReadWav(file:str):
+        
+        """
+        Determines whether or not to read the current wavfile based on some condition usually defined in kwargs
+        """
+        
+        # We always only want .wav files, so if it isn't .wav, short circuit
+        if not file.endswith('.wav'):
+            return False
+        
+        # Add more conditions per dataset as needed
+        # Conditions should be short circuit, so they return False immediately and if all conditions pass, we return True at the end
+        match datasetName:
+            case 'nsynth-valid':
+                if '_acoustic_' not in file and kwargs['kwargs'].get('nsynth_getAcousticOnly', False):
+                    return False
+                    
+        # Return True if we haven't returned false already
+        return True
+
 
     audioDict = defaultdict(list)
     sampleRateDict = defaultdict(list)
@@ -48,7 +80,7 @@ def getDataset(directory:str, datasetName, instruments, toMonoAudio=True) -> tup
         if len(set(directoryParts).intersection(set(instruments))) == 0:
             continue
         for file in files:
-            if file.endswith(".wav"):
+            if shouldReadWav(file):
                 # Construct the full file path
                 file_path = os.path.join(root, file)
 
@@ -57,7 +89,7 @@ def getDataset(directory:str, datasetName, instruments, toMonoAudio=True) -> tup
                 
                 data = data.astype(np.float32)
                 
-                if toMonoAudio and data.ndim == 2:
+                if toMonoAudio and data.ndim >= 2:
                     data = np.mean(data, axis=1)
                 
                 addDataToDictionary(data)

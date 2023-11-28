@@ -31,18 +31,26 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Convert audio files to a minimum sample rate.')
     parser.add_argument('source_folder', type=str, help='Path to the source folder containing original audio files.')
     parser.add_argument('target_folder', type=str, help='Path to the target folder containing converted audio files.')
+    parser.add_argument('sample_rate_override', type=int, help='The override sample rate to be used for converted audio files. Set to 0 for normal usage')
     return parser.parse_args()
 
 if __name__ == "__main__":
+    # Usage: python convertSampleRate.py "source-folder" "target-folder" 0
     args = parse_arguments()
     source_folder = os.path.normpath(args.source_folder)
     target_folder = os.path.normpath(args.target_folder)
+    sample_rate_override = args.sample_rate_override
     
     print(f'Source folder: {source_folder}')
     print(f'Target folder: {target_folder}')
     
-    min_rate = find_min_sample_rate(source_folder)
-    print(f'Min sample rate is {min_rate}')
+    min_rate = None
+    if sample_rate_override == 0:
+        min_rate = find_min_sample_rate(source_folder)
+        print(f'Min sample rate is {min_rate}')
+    else:
+        min_rate = sample_rate_override
+        print(f'Overridden sample rate is {min_rate}')
     
     print(f'Starting conversion...')
     convert_audio_files(source_folder, target_folder, min_rate)

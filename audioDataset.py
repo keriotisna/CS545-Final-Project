@@ -6,7 +6,8 @@ from collections import defaultdict
 from itertools import chain
 from dimensionalityReduction import decomposeAudioSKLearn
 
-# TODO: How to handle different sample rates between datasets? need to downsample to lowest sample rate. liberosa lets us do this I think?
+# TODO: Add support for the nsynth dataset
+# TODO: Add support for the UIOWA dataset? It's pretty small though
 # TODO: Create full spectrogram function which may be more efficient. createSpectrogramsIndependent makes a spectrogram for each point individually, 
 #   but it may be worthwhile to make a single large wav file, then spectrogram that.
 # TODO: Pickle the AudioDataset objects to files for easier reading and to save memory if needed
@@ -31,24 +32,22 @@ class AudioDataset():
     }
 
     # A list of valid dataset names
-    VALID_DATASETS = ['IRMAS', 'good-sounds']
+    VALID_DATASETS = ['IRMAS', 'good-sounds', 'nsynth-valid']
     
-    # Static path references for reading datasets
-    DATA_PATH = 'data'
-    IRMAS_TRAINING_DATA_PATH = os.path.join(DATA_PATH, 'IRMAS-TrainingData')
-    GOOD_SOUNDS_TRAINING_DATA_PATH = os.path.join(DATA_PATH, 'good-sounds\\sound_files')
-    
-    # Valid instruments for each instrument
+    # Valid instruments for each instrument, used for identifying the unique instruments in a dataset
     VALID_IRMAS_INSTRUMENTS = ['cel', 'cla', 'flu', 'gac', 'gel', 'org', 'pia', 'sax', 'tru', 'vio', 'voi']
     VALID_GOOD_SOUNDS_INSTRUMENTS = ['bass_alejandro_recordings', 'cello_margarita_attack', 'cello_margarita_dynamics_stability', 'cello_margarita_open_strings', 'cello_margarita_pitch_stability', 'cello_margarita_reference', 'cello_margarita_timbre_richness', 'cello_margarita_timbre_stability', 'cello_nico_improvement_recordings', 'clarinet_gener_evaluation_recordings', 'clarinet_gener_improvement_recordings', 'clarinet_marti_evaluation_recordings', 'clarinet_pablo_air', 'clarinet_pablo_attack', 'clarinet_pablo_dynamics_stability', 'clarinet_pablo_pitch_stability', 'clarinet_pablo_reference', 'clarinet_pablo_richness', 'clarinet_pablo_timbre_stability', 'clarinet_scale_gener_recordings', 'flute_almudena_air', 'flute_almudena_attack', 'flute_almudena_dynamics_change', 'flute_almudena_evaluation_recordings', 'flute_almudena_reference', 'flute_almudena_reference_piano', 'flute_almudena_stability', 'flute_almudena_timbre', 'flute_josep_evaluation_recordings', 'flute_josep_improvement_recordings', 'flute_scale_irene_recordings', 'oboe_marta_recordings', 'piccolo_irene_recordings', 'saxo_bariton_raul_recordings', 'saxo_raul_recordings', 'saxo_soprane_raul_recordings', 'saxo_tenor_iphone_raul_recordings', 'saxo_tenor_raul_recordings', 'sax_alto_scale_2_raul_recordings', 'sax_alto_scale_raul_recordings', 'sax_tenor_tenor_scales_2_raul_recordings', 'sax_tenor_tenor_scales_raul_recordings', 'trumpet_jesus_evaluation_recordings', 'trumpet_jesus_improvement_recordings', 'trumpet_ramon_air', 'trumpet_ramon_attack_stability', 'trumpet_ramon_dynamics_stability', 'trumpet_ramon_evaluation_recordings', 'trumpet_ramon_pitch_stability', 'trumpet_ramon_reference', 'trumpet_ramon_timbre_stability', 'trumpet_scale_jesus_recordings', 'violin_laia_improvement_recordings', 'violin_laia_improvement_recordings_2', 'violin_raquel_attack', 'violin_raquel_dynamics_stability', 'violin_raquel_pitch_stability', 'violin_raquel_reference', 'violin_raquel_richness', 'violin_raquel_timbre_stability', 'violin_violin_scales_laia_recordings']
     VALID_GENERAL_GOOD_SOUNDS_INSTRUMENTS = list(GENERAL_INSTRUMENT_DICTIONARIES['good-sounds'].keys())
+    VALID_NSYNTH_VALID_INSTRUMENTS = ['bass', 'brass', 'flute', 'guitar', 'keyboard', 'mallet', 'organ', 'reed', 'string', 'synth_lead', 'vocal']
     
     def __init__(self, datasetName:str, instruments:list=None, useGeneralInstruments=False,
                  spectrogramKwargs:dict={
                     'window': 'hann',
                     'nperseg': 1024,
                     'noverlap': 768, 
-                 }):
+                 },
+                 DATA_PATH='data',
+                 **kwargs):
         
         """
         Arguments:
@@ -62,23 +61,39 @@ class AudioDataset():
                 VALID_GENERAL_GOOD_SOUNDS_INSTRUMENTS = ['bas', 'cel', 'cla', 'flu', 'obo', 'pic', 'sax', 'tru', 'vio']
                 
             spectrogramKwargs: A kwarg dictionary for the scipy stft function. This will ensure every spectrogram is consistent across datasets and instances
+            DATA_PATH: Where to look for the data. Can specify to look in a uniform sample rate directory
+            kwargs: Miscellaneous arguments
         """
         
         assert datasetName in self.VALID_DATASETS
-        
         self.datasetName = datasetName
+        
         self.spectrogramKwargs = spectrogramKwargs
+        self.DATA_PATH = DATA_PATH
+        
+        # Static path references for reading datasets
+        self.IRMAS_TRAINING_DATA_PATH = os.path.join(self.DATA_PATH, 'IRMAS-TrainingData')
+        self.GOOD_SOUNDS_TRAINING_DATA_PATH = os.path.join(self.DATA_PATH, 'good-sounds\\sound_files')
+        self.NSYNTH_VALID_TRAINING_DATA_PATH = os.path.join(self.DATA_PATH, 'nsynth-valid\\audio')
+        
+        instruments.sort()
         
         match self.datasetName:
             case 'IRMAS':
-                self._setIRMASInstruments(instruments)
+                # self._setIRMASInstruments(instruments)
+                self._setDatasetInstruments(instruments=instruments)
                 self.audioData, self.sampleRateDict = getDataset(self.IRMAS_TRAINING_DATA_PATH, self.datasetName, self.instruments, toMonoAudio=True)
 
             case 'good-sounds':
-                self._setGoodSoundsInstruments(instruments, useGeneralInstruments)
+                # self._setGoodSoundsInstruments(instruments, useGeneralInstruments)
+                self._setDatasetInstruments(instruments=instruments, useGeneralInstruments=useGeneralInstruments)
                 self.audioData, self.sampleRateDict = getDataset(self.GOOD_SOUNDS_TRAINING_DATA_PATH, self.datasetName, self.specificInstruments, toMonoAudio=True)
                 if useGeneralInstruments:
                     self._mergeInstruments()
+            case 'nsynth-valid':
+                # self._setNsynthValidInstruments(instruments)
+                self._setDatasetInstruments(instruments=instruments)
+                self.audioData, self.sampleRateDict = getDataset(self.NSYNTH_VALID_TRAINING_DATA_PATH, self.datasetName, self.instruments, toMonoAudio=True, **kwargs)
 
 
 
@@ -113,72 +128,137 @@ class AudioDataset():
 
             return mergedData
 
+        datasetName = self.getDatasetName()
 
-        if self.datasetName == 'good-sounds':
+        # Add more datasets as needed
+        match datasetName:
+            case 'good-sounds':
+                mappingDict = self.GENERAL_INSTRUMENT_DICTIONARIES['good-sounds']
+                audioData = self.getAudioData()
+                sampleRateDict = self.sampleRateDict
+                            
+                mergedAudio = mergeDicts(mappingDict, audioData)
+                mergedSampleRates = mergeDicts(mappingDict, sampleRateDict)
             
-            mappingDict = self.GENERAL_INSTRUMENT_DICTIONARIES['good-sounds']
-            audioData = self.getAudioData()
-            sampleRateDict = self.sampleRateDict
-                        
-            mergedAudio = mergeDicts(mappingDict, audioData)
-            mergedSampleRates = mergeDicts(mappingDict, sampleRateDict)
+                self.audioData = mergedAudio
+                self.sampleRateDict = mergedSampleRates
+
+
+
+    def _setDatasetInstruments(self, instruments, useGeneralInstruments=False, **kwargs):
         
-            self.audioData = mergedAudio
-            self.sampleRateDict = mergedSampleRates
-
-        
-        pass
-
-
-    def _setIRMASInstruments(self, instruments):
-
         """
         Sets current instruments during initialization. Should only be called during initialization
         
         Arguments:
             instruments: A list of strings containing instrument names for the given dataset. These should match the keys/instrument names read into the dataset when getDataset() is called
+            useGeneralInstruments: Whether or not to group certain instruments together if they are similar enough, things like tenor sax and alto sax can be just considered saxophone
+            kwargs: Keyword arguments that can be specified if anything special needs to happen
         """
-
-        assert self.datasetName == 'IRMAS'
         
-        if instruments is None:
-            self.instruments = self.VALID_IRMAS_INSTRUMENTS
-        else:
-            assert set(instruments).issubset(set(self.VALID_IRMAS_INSTRUMENTS)), f'Invalid instrument specified, valid instruments are {self.VALID_IRMAS_INSTRUMENTS}, given instruments were {instruments}'
-            self.instruments = instruments
+        datasetName = self.getDatasetName()
+        
+        # Add more datasets as needed
+        match datasetName:
+            case 'IRMAS':
+                if instruments is None:
+                    self.instruments = self.VALID_IRMAS_INSTRUMENTS
+                else:
+                    assert set(instruments).issubset(set(self.VALID_IRMAS_INSTRUMENTS)), f'Invalid instrument specified, valid instruments are {self.VALID_IRMAS_INSTRUMENTS}, given instruments were {instruments}'
+                    self.instruments = instruments
+                    
+            case 'good-sounds':
+                if useGeneralInstruments:
+                    if instruments is None:
+                        self.instruments = self.VALID_GENERAL_GOOD_SOUNDS_INSTRUMENTS
+                    else:
+                        assert set(instruments).issubset(set(self.VALID_GENERAL_GOOD_SOUNDS_INSTRUMENTS)), f'Invalid instrument specified, valid instruments are {self.VALID_GENERAL_GOOD_SOUNDS_INSTRUMENTS}, given instruments were {instruments}'
+                        
+                        specificInstruments = self._getInstrumentsFromGeneralInstruments(instruments)
+                        self.instruments = instruments
+                        self.specificInstruments = specificInstruments
+                else:
+                    if instruments is None:
+                        self.instruments = self.VALID_GOOD_SOUNDS_INSTRUMENTS
+                    else:
+                        assert set(instruments).issubset(set(self.VALID_GOOD_SOUNDS_INSTRUMENTS)), f'Invalid instrument specified, valid instruments are {self.VALID_GOOD_SOUNDS_INSTRUMENTS}, given instruments were {instruments}'
+                        self.instruments = instruments
+        
+            case 'nsynth-valid':
+                if instruments is None:
+                    self.instruments = self.VALID_NSYNTH_VALID_INSTRUMENTS
+                else:
+                    assert set(instruments).issubset(set(self.VALID_NSYNTH_VALID_INSTRUMENTS)), f'Invalid instrument specified, valid instruments are {self.VALID_NSYNTH_VALID_INSTRUMENTS}, given instruments were {instruments}'
+                    self.instruments = instruments
+        
+
+    # def _setNsynthValidInstruments(self, instruments):
+        
+    #     """
+    #     Sets current instruments during initialization. Should only be called during initialization
+        
+    #     Arguments:
+    #         instruments: A list of strings containing instrument names for the given dataset. These should match the keys/instrument names read into the dataset when getDataset() is called
+    #     """
+        
+    #     assert self.datasetName == 'nsynth-valid'
+
+    #     if instruments is None:
+    #         self.instruments = self.VALID_NSYNTH_VALID_INSTRUMENTS
+    #     else:
+    #         assert set(instruments).issubset(set(self.VALID_NSYNTH_VALID_INSTRUMENTS)), f'Invalid instrument specified, valid instruments are {self.VALID_NSYNTH_VALID_INSTRUMENTS}, given instruments were {instruments}'
+    #         self.instruments = instruments
+        
+
+    # def _setIRMASInstruments(self, instruments):
+
+    #     """
+    #     Sets current instruments during initialization. Should only be called during initialization
+        
+    #     Arguments:
+    #         instruments: A list of strings containing instrument names for the given dataset. These should match the keys/instrument names read into the dataset when getDataset() is called
+    #     """
+
+    #     assert self.datasetName == 'IRMAS'
+        
+    #     if instruments is None:
+    #         self.instruments = self.VALID_IRMAS_INSTRUMENTS
+    #     else:
+    #         assert set(instruments).issubset(set(self.VALID_IRMAS_INSTRUMENTS)), f'Invalid instrument specified, valid instruments are {self.VALID_IRMAS_INSTRUMENTS}, given instruments were {instruments}'
+    #         self.instruments = instruments
                     
         
         
         
-    def _setGoodSoundsInstruments(self, instruments, useGeneralInstruments):
+    # def _setGoodSoundsInstruments(self, instruments, useGeneralInstruments):
         
-        """
-        Sets current instruments during initialization. Should only be called during initialization
+    #     """
+    #     Sets current instruments during initialization. Should only be called during initialization
         
-        Arguments:
-            instruments: A list of strings containing instrument names for the given dataset. These should match the keys/instrument names read into the dataset when getDataset() is called
-            useGeneralInstruments: A boolean flag which determines whether or not the returned data will be combined under general instrument names
-        """
+    #     Arguments:
+    #         instruments: A list of strings containing instrument names for the given dataset. These should match the keys/instrument names read into the dataset when getDataset() is called
+    #         useGeneralInstruments: A boolean flag which determines whether or not the returned data will be combined under general instrument names
+    #     """
         
-        assert self.datasetName == 'good-sounds'
+    #     assert self.datasetName == 'good-sounds'
         
-        if useGeneralInstruments:
+    #     if useGeneralInstruments:
         
-            if instruments is None:
-                self.instruments = self.VALID_GENERAL_GOOD_SOUNDS_INSTRUMENTS
-            else:
-                assert set(instruments).issubset(set(self.VALID_GENERAL_GOOD_SOUNDS_INSTRUMENTS)), f'Invalid instrument specified, valid instruments are {self.VALID_GENERAL_GOOD_SOUNDS_INSTRUMENTS}, given instruments were {instruments}'
+    #         if instruments is None:
+    #             self.instruments = self.VALID_GENERAL_GOOD_SOUNDS_INSTRUMENTS
+    #         else:
+    #             assert set(instruments).issubset(set(self.VALID_GENERAL_GOOD_SOUNDS_INSTRUMENTS)), f'Invalid instrument specified, valid instruments are {self.VALID_GENERAL_GOOD_SOUNDS_INSTRUMENTS}, given instruments were {instruments}'
                 
-                specificInstruments = self._getInstrumentsFromGeneralInstruments(instruments)
-                self.instruments = instruments
-                self.specificInstruments = specificInstruments
+    #             specificInstruments = self._getInstrumentsFromGeneralInstruments(instruments)
+    #             self.instruments = instruments
+    #             self.specificInstruments = specificInstruments
                 
-        else:
-            if instruments is None:
-                self.instruments = self.VALID_GOOD_SOUNDS_INSTRUMENTS
-            else:
-                assert set(instruments).issubset(set(self.VALID_GOOD_SOUNDS_INSTRUMENTS)), f'Invalid instrument specified, valid instruments are {self.VALID_GOOD_SOUNDS_INSTRUMENTS}, given instruments were {instruments}'
-                self.instruments = instruments
+    #     else:
+    #         if instruments is None:
+    #             self.instruments = self.VALID_GOOD_SOUNDS_INSTRUMENTS
+    #         else:
+    #             assert set(instruments).issubset(set(self.VALID_GOOD_SOUNDS_INSTRUMENTS)), f'Invalid instrument specified, valid instruments are {self.VALID_GOOD_SOUNDS_INSTRUMENTS}, given instruments were {instruments}'
+    #             self.instruments = instruments
 
         
         
@@ -318,8 +398,9 @@ class AudioDataset():
             # Create spectrograms without replacing audioData
             else:
                 for idx, (data, sampleRate) in enumerate(zip(currentInstrumentData, currentSampleRates)):
-                    spectrogram = self.getMagnitudeSpectrogram(data, sampleRate)
-                    spectrograms.append(spectrogram)
+                    mag, phase = self.getMagnitudePhaseSpectrogram(data, sampleRate)
+                    spectrograms.append(mag)
+                    phases.append(phase)
                     
                 self.spectrograms[instrument] = spectrograms
                 
@@ -357,7 +438,7 @@ class AudioDataset():
             else:
                 allData = np.concatenate((allData, concatenatedData), axis=1)
             
-            # TODO: Remove columns with low energy to reduce size
+            # TODO: Remove columns with low energy to reduce size?
             
             # Store how long the current data array was so we can navigate it
             indexDict[instrumentName] = concatenatedData.shape[-1]

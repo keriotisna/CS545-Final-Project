@@ -1,7 +1,8 @@
 import matplotlib.pyplot as plt
 import random
 import numpy as np
-
+from pydub import AudioSegment
+import os
 
 
 def displayImageGrid(images: list, H: int, W: int=0, shuffle=False, figsize=None):
@@ -93,3 +94,26 @@ def displayImageGrid2(images: list, H: int, W: int=0, shuffle=False, figsize=Non
 
     plt.subplots_adjust(wspace=0.1, hspace=0)  # Adjust spacing between images
     plt.show()
+    
+    
+def find_min_sample_rate(folder_path) -> int:
+    
+    """
+    Finds and returns the minimum sample rate among all .aiff, .wav, and .aif files
+    
+    Arguments:
+        folder_path: The folder path to search through
+        
+    Returns:
+        min_rate: The min sample rate among all files in the given directory or None if no files were found
+    """
+    
+    min_rate = None
+    for root, dirs, files in os.walk(folder_path):
+        for file in files:
+            if file.endswith(('.aiff', '.wav', '.aif')):
+                audio = AudioSegment.from_file(os.path.join(root, file))
+                if min_rate is None or audio.frame_rate < min_rate:
+                    min_rate = audio.frame_rate
+                    print(f'Current min rate: {min_rate}')
+    return min_rate
