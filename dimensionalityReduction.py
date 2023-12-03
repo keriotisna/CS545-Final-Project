@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.sparse.linalg import eigs
+from scipy import sparse
 from numba import njit
 from sklearn.decomposition import non_negative_factorization
 
@@ -172,9 +173,10 @@ def getNMF(X: np.ndarray, R: int, iterations:int=4000, optimizationMethod='KL', 
 
     dims, samples = X.shape
     # W contains synthesis features and has shape (dims x R) where R is the low rank dimensionality
-    W = np.random.rand(dims, R)
+    W = np.random.rand(dims, R).astype(np.float32)
     # H contains the activations of the synthesis features and has dimensions (R x samples)
-    H = np.random.rand(R, samples)
+    H = np.random.rand(R, samples).astype(np.float32)
+    eps = np.float32(eps)
     
     prevW = W.copy()
     prevH = H.copy()
@@ -280,8 +282,8 @@ def decomposeAudioSlow(X, soundArrayW, iterations=1000, eps=1e-5):
     
     return W, H
 
-
-def decomposeAudioSKLearn(X:np.ndarray, W:np.ndarray, H:np.ndarray=None) -> tuple[np.ndarray, np.ndarray]:
+# TODO: Try with sparse matrices? Most of the basis functions are zero after all
+def decomposeAudioSKLearn(X:np.ndarray, W:np.ndarray, H:np.ndarray=None, regularization=0.1) -> tuple[np.ndarray, np.ndarray]:
     
     """
     Decompose audio from a given spectrogram X, a basis function matrix W, and an optional prior matrix H.
@@ -295,12 +297,12 @@ def decomposeAudioSKLearn(X:np.ndarray, W:np.ndarray, H:np.ndarray=None) -> tupl
 
     Returns:
         W_NMF, H_NMF
-        The decomposed NMF features found from sklearn
+        The decomposed NMF features found from sklearn. These will be (basisFunctions, activations)
     """
     
     # sklearn only lets us freeze H, so we need to swap all the matrices to align with what it wants
     # Transpose X to fit sklearn's expected dimensionality (samples, features)
-    XTransposed = X.T
+    XTransposed = X.T + 1e-5
 
     # Transpose H to fit sklearn's expected dimensionality (components, features)
     HTransposed = W.T
@@ -312,19 +314,22 @@ def decomposeAudioSKLearn(X:np.ndarray, W:np.ndarray, H:np.ndarray=None) -> tupl
         WTransposed = H.copy()
 
     # Perform NMF
-    W_NMF, H_NMF, _ = non_negative_factorization(
-        X=XTransposed.astype(np.float32) + 1e-5,
+    W_NMF, H_NMF, niter = non_negative_factorization(
+        X=XTransposed.astype(np.float32),
         W=WTransposed.astype(np.float32),
         H=HTransposed.astype(np.float32),
         n_components=HTransposed.shape[0], # Need to define n_components or it will break, probably a bug
         update_H=False,  # Keep our actual weights W fixed
         init='custom',  # Use custom initialization
-        max_iter=8000,
+        max_iter=2000,
         solver='mu',
         beta_loss='frobenius',
         l1_ratio=0.5,
-        alpha_W=5
+        alpha_W=regularization,
+        tol=1e-6
     )
+    
+    print(f'NMF terminated after {niter} iterations')
     
     # Again, these are swapped and transposed since sklearn won't let us freeze W
     return H_NMF.T, W_NMF.T

@@ -3,6 +3,7 @@ import random
 import numpy as np
 from pydub import AudioSegment
 import os
+import struct
 
 
 def displayImageGrid(images: list, H: int, W: int=0, shuffle=False, figsize=None):
@@ -96,24 +97,132 @@ def displayImageGrid2(images: list, H: int, W: int=0, shuffle=False, figsize=Non
     plt.show()
     
     
-def find_min_sample_rate(folder_path) -> int:
+def findMinSampleRateFast(directory) -> int:
     
     """
-    Finds and returns the minimum sample rate among all .aiff, .wav, and .aif files
+    Finds the minimum sample rate of all .wav files in a directory by reading file header information
+    
+    Returns:
+        minSampleRate: The minimum found rate or None if nothing was found
+    """
+    
+    minSampleRate = None
+
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            if file.endswith('.wav'):
+                try:
+                    with open(os.path.join(root, file), 'rb') as wavFile:
+                        wavFile.seek(24)  # Jump to the sample rate in the header
+                        sampleRate = struct.unpack('<I', wavFile.read(4))[0]
+                        if minSampleRate is None or sampleRate < minSampleRate:
+                            minSampleRate = sampleRate
+                            print(f'Current min rate: {minSampleRate}')
+
+                except Exception as e:
+                    print(f"Error reading {file}: {e}")
+
+    return minSampleRate
+
+# TODO: Check if we are supposed to clip like this, maybe ditch the actual clip function until the NMF needs it?
+def clipSpectrogram(spec):
+    return np.clip(np.log(np.abs(spec)+1e-5), a_min=0, a_max=np.inf).astype(np.float32)
+
+
+def getLowEnergyIndices(spec:np.ndarray, threshold=1) -> np.ndarray:
+
+    """
+    Gets a boolean mask represnting all indices where the total energy was below some threshold
     
     Arguments:
-        folder_path: The folder path to search through
+        spec: An input magnitude (or raw) spectrogram
+        threshold: The threshold to consider a frame to have low energy
+        
+    Returns
+        removable: A boolean numpy array of the same length as spec which denotes which frames are of low energy 
+    """
+
+    def getSpectrogramEnergy(spec:np.ndarray):
+        return np.sum(np.square(spec), axis=0)
+            
+    energy = getSpectrogramEnergy(spec)
+    
+    removable = (energy < threshold)
+    
+    return removable
+
+# TODO: Write this to prune the lowest 30% of frames?
+def removeLowEnergyFrames(spec:np.ndarray, threshold=0, printPrunedStats=False) -> np.ndarray:
+    
+    """
+    Removes low energy frames from a spectrogram and its corresponding labels if the energy is below some threshold
+    
+    Arguments:
+        spec: The spectrogram
+        threshold: How low energy should be for removal
         
     Returns:
-        min_rate: The min sample rate among all files in the given directory or None if no files were found
+        newSpec
     """
     
-    min_rate = None
-    for root, dirs, files in os.walk(folder_path):
-        for file in files:
-            if file.endswith(('.aiff', '.wav', '.aif')):
-                audio = AudioSegment.from_file(os.path.join(root, file))
-                if min_rate is None or audio.frame_rate < min_rate:
-                    min_rate = audio.frame_rate
-                    print(f'Current min rate: {min_rate}')
-    return min_rate
+    removable = getLowEnergyIndices(spec, threshold=threshold)
+    
+    startingFrames = spec.shape[-1]
+    newSpec = np.delete(spec, removable, axis=1)
+
+    if printPrunedStats:
+        print(f'Starting spectrogram has {startingFrames} frames')
+        print(f'Pruned spectrogram has {newSpec.shape[-1]} frames. Pruned {startingFrames-newSpec.shape[-1]} frames')
+
+    return newSpec
+
+        
+def normalizeWAV(arr:np.ndarray) -> np.ndarray:
+    
+    """
+    Normalize the volume of a .wav file as a numpy array
+    
+    Arguments:
+        arr: The audio to normalize as a 1D array
+        
+    Returns:
+        normalized: A normalized version of the audio in the float32 format
+    """
+    
+    maxVal = np.max(np.abs(arr))
+
+    normalized = arr * (1.0 / maxVal)
+    return normalized.astype(np.float32)
+
+
+def convertFloat32toInt16(arr: np.ndarray) -> np.ndarray:
+    """
+    Convert a float32 normalized array to a 16-bit integer format.
+
+    Arguments:
+        arr: The input float32 array.
+    
+    Returns:
+        int16Array: An int16 version of the float32 array
+    """
+    int16Array = np.clip(arr, -1, 1)  # Ensure values are within [-1, 1]
+    int16Array = (int16Array * 32767).astype(np.int16)
+    return int16Array
+
+def concatenateSpectrograms(spectrograms:list) -> np.ndarray:
+    """Concatenates a list of spectrograms along axis 1"""
+    return np.concatenate(spectrograms, axis=1)
+
+
+
+def displayConcatenatedSpectrograms(spectrograms:list, title='Concatenated spectrograms'):
+    
+    """
+    Displays all spectrograms concatenated together when given a list of spectrograms
+    
+    Arguments:
+        spectrograms: A list of spectrpgrams
+    """
+        
+    concatenated = concatenateSpectrograms(spectrograms)
+    plt.figure(figsize=(30, 3)), plt.pcolormesh(concatenated), plt.title(title), plt.show()

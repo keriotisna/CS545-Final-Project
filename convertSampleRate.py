@@ -1,6 +1,7 @@
 import os
 from pydub import AudioSegment
 import argparse
+import struct
 
 def find_min_sample_rate(folder_path):
     min_rate = None
@@ -12,6 +13,30 @@ def find_min_sample_rate(folder_path):
                     min_rate = audio.frame_rate
                     print(f'Current min rate: {min_rate}')
     return min_rate
+
+def find_min_sample_rate_fast(directory):
+    
+    """
+    Find the min sample rate of .wav files in a directory by examining file header data instead of reading the whole .wav
+    """
+    
+    min_sample_rate = None
+
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            if file.endswith('.wav'):
+                try:
+                    with open(os.path.join(root, file), 'rb') as wav_file:
+                        wav_file.seek(24)  # Jump to the sample rate in the header
+                        sample_rate = struct.unpack('<I', wav_file.read(4))[0]
+                        if min_sample_rate is None or sample_rate < min_sample_rate:
+                            min_sample_rate = sample_rate
+                            print(f'Current min rate: {min_sample_rate}')
+
+                except Exception as e:
+                    print(f"Error reading {file}: {e}")
+
+    return min_sample_rate
 
 def convert_audio_files(source_folder, target_folder, target_sample_rate):
     for root, dirs, files in os.walk(source_folder):
@@ -46,7 +71,7 @@ if __name__ == "__main__":
     
     min_rate = None
     if sample_rate_override == 0:
-        min_rate = find_min_sample_rate(source_folder)
+        min_rate = find_min_sample_rate_fast(source_folder)
         print(f'Min sample rate is {min_rate}')
     else:
         min_rate = sample_rate_override
@@ -54,3 +79,4 @@ if __name__ == "__main__":
     
     print(f'Starting conversion...')
     convert_audio_files(source_folder, target_folder, min_rate)
+    print('Done!')
