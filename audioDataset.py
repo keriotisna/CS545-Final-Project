@@ -58,6 +58,9 @@ class AudioDataset():
     badFilenameRegex = re.compile(r'brass_acoustic_046-(08[4-9]|09[0-9]|10[0-8])-\d{3}\.wav$')
     BAD_NSYNTH_FILENAMES = [badFilenameRegex]
     
+    # The color map used for displaying all spectrograms for cheaper printing
+    spectrogramCmap = None
+    
     def __init__(self, datasetName:str, instruments:list=None, useGeneralInstruments=False,
                  spectrogramKwargs:dict={
                     'window': 'hann',
@@ -94,7 +97,9 @@ class AudioDataset():
         self.GOOD_SOUNDS_TRAINING_DATA_PATH = os.path.join(self.DATA_PATH, 'good-sounds\\sound_files')
         self.NSYNTH_VALID_TRAINING_DATA_PATH = os.path.join(self.DATA_PATH, 'nsynth-valid\\audio')
         
-        instruments.sort()
+        # Sort the instruments alphabetically so things stay consistent between runs with different instruments
+        if instruments is not None:
+            instruments.sort()
         
         match self.datasetName:
             case 'IRMAS':
@@ -478,7 +483,8 @@ class AudioDataset():
             x: A 1D numpy array which represents the raw reconstruction without post-processing like normalization or type conversion.
         """
         
-        complexSpec = np.exp(mag) * np.exp(1j * phase)
+        # complexSpec = np.exp(mag) * np.exp(1j * phase)
+        complexSpec = mag * np.exp(1j * phase)
         t, x = istft(complexSpec, fs=self.getMinSampleRate(), **self.getSpectrogramKwargs())
         
         return x
@@ -502,13 +508,22 @@ class AudioDataset():
         
         print(f'NOLA is: {check_NOLA(**self.getSpectrogramKwargs())}')
         
-        spec = stft(data, fs=fs, **self.getSpectrogramKwargs())[-1]
+        # spec = stft(data, fs=fs, **self.getSpectrogramKwargs())[-1]
+        # (magnitude, phase)
+        # phase = np.angle(spec)
+        # spec = np.clip(np.log(np.abs(spec)+1e-5), a_min=0, a_max=np.inf).astype(np.float32)
+        # _, reconstruction = istft(np.exp(spec)*np.exp(1j * phase), fs=fs, **self.getSpectrogramKwargs())
         
+        
+        # _, _, spec = stft(data, fs=fs, **self.getSpectrogramKwargs())
+        # _, reconstruction = istft(spec, fs=fs, **self.getSpectrogramKwargs())
+
+        
+        spec = stft(data, fs=fs, **self.getSpectrogramKwargs())[-1]
         # (magnitude, phase)
         phase = np.angle(spec)
-        spec = np.clip(np.log(np.abs(spec)+1e-5), a_min=0, a_max=np.inf).astype(np.float32)
-
-        _, reconstruction = istft(np.exp(spec)*np.exp(1j * phase), fs=fs, **self.getSpectrogramKwargs())
+        spec = np.clip(np.abs(spec), a_min=0, a_max=np.inf).astype(np.float32)
+        _, reconstruction = istft(spec*np.exp(1j * phase), fs=fs, **self.getSpectrogramKwargs())
         
         return reconstruction
     
@@ -526,7 +541,7 @@ class AudioDataset():
             specs = spectrograms[instName]
             
             concatenated = concatenateSpectrograms(specs)
-            plt.figure(figsize=(30, 3)), plt.pcolormesh(concatenated), plt.title(instName), plt.show()
+            plt.figure(figsize=(30, 3)), plt.pcolormesh(concatenated, cmap=self.spectrogramCmap), plt.title(instName), plt.show()
 
     def getMagnitudeSpectrogram(self, data:np.ndarray, fs:int) -> np.ndarray:
         
@@ -636,6 +651,43 @@ class AudioDataset():
             self.spectrograms = self.audioData
             self.deleteAudioData()
 
+    def createSpectrogramsUnified(self, deleteAudioData=True):
+        """
+        Set the class variable spectrogram to a similarly structured dictionary with values as the spectrograms produced by each individual sample
+        
+        Sets class variables self.spectrograms and self.phases
+        
+        This method differs from createSpectrogramsIndependent() by combining the audio data first, then taking a single large spectrogram to prevent artifacts from discontinuities.
+        """        
+        
+        self.spectrograms = {}
+        self.phases = {}
+        
+        for instrument, currentInstrumentData in self.audioData.items():
+            
+            currentSampleRates = self.sampleRateDict[instrument]
+            assert len(currentInstrumentData) == len(currentSampleRates)
+            spectrograms = []
+            phases = []
+
+            # We will combine all audio data into a single large array, then take the spectrogram all at once
+            
+            # Flatten the list of audio data by concatenating subsequent rows
+            bigAudioData = np.array(currentInstrumentData).reshape(-1)
+                
+            mag, phase = self.getMagnitudePhaseSpectrogram(bigAudioData, self.getMinSampleRate())
+
+            spectrograms.append(mag)
+            phases.append(phase)
+                
+            self.spectrograms[instrument] = spectrograms
+            self.phases[instrument] = phases
+
+        if deleteAudioData:
+            self.deleteAudioData()
+        
+        pass
+
 
     def removeLowEnergyFrames_(self, threshold=1):
         
@@ -706,6 +758,7 @@ class AudioDataset():
     
     
     # TODO: Try doing several smaller decompositions on segments of the testAudio
+    # TODO: Keep looking at spectrogram reconstruction, results still sound wierd, so there HAS to be a bug I'm missing in the conversion back
     def runNMFAudioDecomposition(self, testAudio:np.ndarray, showPlots=True, nmfRegularization=0.001):
     
         """
@@ -740,12 +793,13 @@ class AudioDataset():
                 currentBasisFunctions = W_NMF[:, currentBase:currentBase+indexOffset]
                 currentActivations = H_NMF[currentBase:currentBase+indexOffset, :]
                 
-                currentReconstruction = np.exp(currentBasisFunctions @ currentActivations) * np.exp(1j * phase)
+                # currentReconstruction = np.exp(currentBasisFunctions @ currentActivations) * np.exp(1j * phase)
+                currentReconstruction = (currentBasisFunctions @ currentActivations) * np.exp(1j * phase)
                 isolations.append(currentReconstruction)
                 currentBase += indexOffset
                 
                 if showPlots:
-                    plt.pcolormesh(np.abs(currentReconstruction)), plt.title('Decomposed Recon'), plt.show()
+                    plt.pcolormesh(np.abs(currentReconstruction), cmap=self.spectrogramCmap), plt.title('Decomposed Recon'), plt.show()
             
             return isolations
         
@@ -761,8 +815,8 @@ class AudioDataset():
         magnitude, phase = self.getMagnitudePhaseSpectrogram(data=testAudio, fs=fs)
         
         if showPlots:
-            plt.figure(figsize=(30, 3)), plt.pcolormesh(magnitude), plt.title('Original data'), plt.show()
-            plt.figure(figsize=(30, 3)), plt.pcolormesh(basisFunctions), plt.title('W_NMF'), plt.show()
+            plt.figure(figsize=(30, 3)), plt.pcolormesh(magnitude, cmap=self.spectrogramCmap), plt.title('Original data'), plt.show()
+            plt.figure(figsize=(30, 3)), plt.pcolormesh(basisFunctions, cmap=self.spectrogramCmap), plt.title('W_NMF'), plt.show()
 
         # TODO: If we get time priors for H, initialize them here
         # NOTE: REGULARIZATION HYPERPARAMETER IS VERY IMPORTANT. RESULTS ARE SENSITIVE
@@ -770,7 +824,7 @@ class AudioDataset():
 
         # print(f'Min: {np.min(H_NMF)} Max: {np.max(H_NMF)}')
         if showPlots:
-            plt.figure(figsize=(30, 3)), plt.pcolormesh(H_NMF), plt.title('H_NMF'), plt.show()
+            plt.figure(figsize=(30, 3)), plt.pcolormesh(H_NMF, cmap=self.spectrogramCmap), plt.title('H_NMF'), plt.show()
                     
         # Isolate the instruments via NMF reconstruction
         isolations = _reconstructDecompositions(W_NMF, H_NMF, phase, indexDict)

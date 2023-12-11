@@ -125,8 +125,11 @@ def findMinSampleRateFast(directory) -> int:
     return minSampleRate
 
 # TODO: Check if we are supposed to clip like this, maybe ditch the actual clip function until the NMF needs it?
+# I think the log really messes things up when converting back and forth from spec to audio. It seems to introduce a lot of artifacts for some reason, maybe the +1e-5 caused it?
 def clipSpectrogram(spec):
-    return np.clip(np.log(np.abs(spec)+1e-5), a_min=0, a_max=np.inf).astype(np.float32)
+    # return np.clip(np.log(np.abs(spec)+1e-5), a_min=0, a_max=np.inf).astype(np.float32)
+    return np.clip(np.abs(spec), a_min=0, a_max=np.inf).astype(np.float32)
+
 
 
 def getLowEnergyIndices(spec:np.ndarray, threshold=1) -> np.ndarray:
