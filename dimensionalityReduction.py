@@ -289,9 +289,9 @@ def _NMFUpdateKLDivRegularized(X:np.ndarray, W:np.ndarray, H:np.ndarray, eps:np.
         
         newW = W * (wNumerator)/(wDenominator+eps)
         
-        # Add priors if parameters are set for priors
+        # Add priors if parameters are set for priors, but ensure overall magnitude doesn't change
         if wPrime is not None and alpha is not None:
-            newW += wPrime * alpha
+            newW = newW * (1-alpha) + wPrime * alpha
         
         newW = np.maximum(0, newW)
 
@@ -306,7 +306,7 @@ def _NMFUpdateKLDivRegularized(X:np.ndarray, W:np.ndarray, H:np.ndarray, eps:np.
     
     # Add priors if parameters are set for priors
     if hPrime is not None and beta is not None:
-        newH += hPrime * beta
+        newH = newH * (1-beta) + hPrime * beta
     
     newH = np.maximum(newH, 0)
 
@@ -314,7 +314,7 @@ def _NMFUpdateKLDivRegularized(X:np.ndarray, W:np.ndarray, H:np.ndarray, eps:np.
 
 
 # @njit
-def decomposeAudio(X, W, H=None, alpha=None, beta=None, wPrime=None, hPrime=None, iterations=2000, eps=1e-5, fixBasisFunctions=True, useRegularization=False, regularization=1e-4):
+def decomposeAudio(X, W, H=None, alpha=None, beta=None, wPrime=None, hPrime=None, iterations=2000, eps=1e-7, fixBasisFunctions=True, useRegularization=False, regularization=1e-4):
 
     """
     Computes the NMF decomposition for W and H with Numba's JIT compiling to be a bit faster.
@@ -353,7 +353,7 @@ def decomposeAudio(X, W, H=None, alpha=None, beta=None, wPrime=None, hPrime=None
         else:
             W, H = _NMFUpdateKLDiv(X=X, W=W, H=H, eps=eps, alpha=alpha, beta=beta, wPrime=wPrime, hPrime=hPrime, fixBasisFunctions=fixBasisFunctions)
 
-        distance = np.linalg.norm(X - W @ H, 'fro')
+        distance = np.linalg.norm(X - (W @ H), 2)
         if distance < 1e-4:
             break
 

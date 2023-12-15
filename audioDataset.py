@@ -61,7 +61,7 @@ class AudioDataset():
     # brass_acoustic_046-084-***.wav to brass_acoustic_046-108-***.wav
     badFilenameRegex = re.compile(r'brass_acoustic_046-(08[4-9]|09[0-9]|10[0-8])-\d{3}\.wav$')
     # Filter out plucked strings since they may sound like piano
-    pluckedStringsRegex = re.compile(r'string_acoustic_(012|014|056)-.*-\d{3}\.wav$')
+    pluckedStringsRegex = re.compile(r'string_acoustic_(012|014|056)-\d{3}-\d{3}\.wav$')
     BAD_NSYNTH_FILENAMES = [badFilenameRegex, pluckedStringsRegex]
     
     # The color map used for displaying all spectrograms for cheaper printing
@@ -390,7 +390,7 @@ class AudioDataset():
             validIndices = [i for i in range(len(filenameList)) if isValidFilename(filenameList[i])]
             
             # First, filter based on velocity
-            velocityFilteredIndices = [i for i in validIndices if getInstVel(filenameList[i]) in ['100', '025']]
+            velocityFilteredIndices = [i for i in validIndices if getInstVel(filenameList[i]) in ['100', '025', '127', '075']]
 
             # Group indices by instrument ID for velocity-filtered data
             idToIndices = {}
@@ -828,7 +828,7 @@ class AudioDataset():
     
     # TODO: Try doing several smaller decompositions on segments of the testAudio
     # TODO: Keep looking at spectrogram reconstruction, results still sound wierd, so there HAS to be a bug I'm missing in the conversion back
-    def runNMFAudioDecomposition(self, testAudio:np.ndarray, showPlots=True, nmfRegularization=0.001):
+    def runNMFAudioDecomposition(self, testAudio:np.ndarray, showPlots=True, nmfRegularization=0.001, iterations=1600):
     
         """
         Runs the full NMF audio decomposition process on given test audio using the stored spectrograms as basis functions
@@ -867,8 +867,8 @@ class AudioDataset():
                 isolations.append(currentReconstruction)
                 currentBase += indexOffset
                 
-                if showPlots:
-                    plt.pcolormesh(np.abs(currentReconstruction), cmap=self.spectrogramCmap), plt.title('Decomposed Recon'), plt.show()
+                # if showPlots:
+                    # plt.pcolormesh(np.log(np.abs(currentReconstruction)+1e-4), cmap=self.spectrogramCmap), plt.title('Decomposed Recon'), plt.show()
             
             return isolations
         
@@ -879,26 +879,32 @@ class AudioDataset():
 
         # Combine all spectrogram data into a large array that can be used for NMF as a basis function array
         # basisFunctions, indexDict = self.getBasisFunctions() # basisFunctions are float32
-        basisFunctions, indexDict = self.getBasisFunctionsSmall(samplesPerSample=5, averageSamples=False)
+        basisFunctions, indexDict = self.getBasisFunctionsSmall(samplesPerSample=5, averageSamples=True)
 
         # Extract magnitude and phase spectrograms of the test audio for channel separation
         magnitude, phase = self.getMagnitudePhaseSpectrogram(data=testAudio, fs=fs)
         
         if showPlots:
-            plt.figure(figsize=(30, 3)), plt.pcolormesh(np.log(magnitude+1e-5), cmap=self.spectrogramCmap), plt.title('Original data'), plt.show()
-            plt.figure(figsize=(30, 3)), plt.pcolormesh(np.log(basisFunctions+1e-5), cmap=self.spectrogramCmap), plt.title('W_NMF'), plt.show()
+            plt.figure(figsize=(10, 3)), plt.pcolormesh(np.log(magnitude+1e-5), cmap=self.spectrogramCmap), plt.title('Original data'), plt.show()
+            plt.figure(figsize=(10, 3)), plt.pcolormesh(np.log(basisFunctions+1e-5), cmap=self.spectrogramCmap), plt.title('W_NMF'), plt.show()
 
         # W_NMF, H_NMF = decomposeAudioSKLearn(X=magnitude, W=basisFunctions, H=None, regularization=nmfRegularization) # sklearn version is way slower now for some reason
         # W_NMF, H_NMF = decomposeAudio(X=magnitude, W=basisFunctions, iterations=400, wPrime=basisFunctions, alpha=1e-4, fixBasisFunctions=True, useRegularization=True)
-        W_NMF, H_NMF = decomposeAudio(X=magnitude, W=basisFunctions, iterations=800, wPrime=basisFunctions, alpha=1e-5, fixBasisFunctions=True, useRegularization=True, regularization=nmfRegularization)
+        W_NMF, H_NMF = decomposeAudio(X=magnitude, W=basisFunctions, iterations=iterations, wPrime=basisFunctions, alpha=0.01, fixBasisFunctions=True, useRegularization=True, regularization=nmfRegularization)
 
-
-
-        if showPlots:
-            plt.figure(figsize=(30, 3)), plt.pcolormesh(H_NMF, cmap=self.spectrogramCmap), plt.title('H_NMF'), plt.show()
                     
         # Isolate the instruments via NMF reconstruction
         isolations = _reconstructDecompositions(W_NMF, H_NMF, phase, indexDict)
+
+        if showPlots:
+            plt.figure(figsize=(10, 3)), plt.pcolormesh(H_NMF, cmap=self.spectrogramCmap), plt.title('H_NMF'), plt.show()
+            
+            fig, axes = plt.subplots(1, len(isolations), figsize=(15, 4))  # 1 row, 3 columns
+            for i, spec in enumerate(isolations):
+                axes[i].pcolormesh(np.log(np.abs(spec)+1e-4)), axes[i].set_title(f'Isolated instrument {i}')
+            plt.tight_layout()
+            fig.suptitle('Decomposed Isolations', fontsize=15), plt.subplots_adjust(top=0.85)
+            plt.show()
 
         # Write each isolation back to a int16 .wav file using the istft and normalization
         for idx, isolation in enumerate(isolations):
@@ -919,6 +925,8 @@ class AudioDataset():
         print(f'minRaw: {np.min(x)} maxRaw: {np.max(x)}')
 
         wavfile.write(f'decompositions\\originalReconstruction.wav', rate=fs, data=x)
+        
+        return isolations
 
 
 
@@ -944,7 +952,9 @@ class AudioDataset():
             
         models = {}
 
-        basisFunctions, _ = self.getBasisFunctions()
+        # basisFunctions, _ = self.getBasisFunctions()
+        basisFunctions, _ = self.getBasisFunctionsSmall()
+
 
         minX, maxX = np.min(basisFunctions), np.max(basisFunctions)
 
@@ -1081,7 +1091,9 @@ class AudioDataset():
         
         models = {}
 
-        basisFunctions, _ = self.getBasisFunctions()
+        # basisFunctions, _ = self.getBasisFunctions()
+        basisFunctions, _ = self.getBasisFunctionsSmall()
+
         minX, maxX = np.min(basisFunctions), np.max(basisFunctions)
 
         if usePCA:
@@ -1187,13 +1199,19 @@ class AudioDataset():
         audioSeparated = []
         spectrogramSeparated = []
         
-        possibleAudioSamples = []
-        for group in self.getAudioData().values():
-            possibleAudioSamples.extend(group)
-        
-        for i in range(mixtureCount):
+        # possibleAudioSamples = []
+        # for group in self.getAudioData().values():
+        #     possibleAudioSamples.extend(group)
+        # randomSamples = random.sample(possibleAudioSamples, k=samplesPerMixture)
+
+        # For each random mixture, sample random different instrument groups and select an individual sample from each.
+        for _ in range(mixtureCount):
+            selectedInstrumentGroups = random.sample(self.getInstruments(), k=samplesPerMixture)
+            randomSamples = []
             
-            randomSamples = random.sample(possibleAudioSamples, k=samplesPerMixture)
+            for instName in selectedInstrumentGroups:
+                randomSamples.append(random.sample(self.getAudioData()[instName], k=1)[0])
+            
         
             audioToCombine = []
             specsToCombine = []
