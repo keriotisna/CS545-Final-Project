@@ -203,7 +203,7 @@ def getNMF(X: np.ndarray, R: int, iterations:int=4000, optimizationMethod='KL', 
 
 
 # @njit(parallel=True)
-def _NMFUpdateKLDivNumba(X:np.ndarray, W:np.ndarray, H:np.ndarray, eps:np.float32, alpha=None, beta=None, wPrime=None, hPrime=None) -> tuple[np.ndarray, np.ndarray]:
+def _NMFUpdateKLDiv(X:np.ndarray, W:np.ndarray, H:np.ndarray, eps:np.float32, alpha=None, beta=None, wPrime=None, hPrime=None, fixBasisFunctions=True) -> tuple[np.ndarray, np.ndarray]:
     
     """
     Computes the NMF updates for W and H with Numba's JIT compiling to be a bit faster.
@@ -224,12 +224,13 @@ def _NMFUpdateKLDivNumba(X:np.ndarray, W:np.ndarray, H:np.ndarray, eps:np.float3
         H: The activations recovered from decomposition
     """
     
-    # Calculate the numerator and the denominator for the H update
-    wNumerator = (X / (W @ H + eps)) @ H.T
-    wDenominator = np.sum(H, axis=1) + eps
-    
-    W = np.multiply(W, wNumerator/wDenominator)    
-    W = np.maximum(W, 0)
+    if not fixBasisFunctions:
+        # Calculate the numerator and the denominator for the H update
+        wNumerator = (X / (W @ H + eps)) @ H.T
+        wDenominator = np.sum(H, axis=1) + eps
+        
+        W = np.multiply(W, wNumerator/wDenominator)    
+        W = np.maximum(W, 0)
     
     # If alpha and wPrime priors are defined, add wPrime as a prior
     if alpha is not None and wPrime is not None:
@@ -256,9 +257,64 @@ def _NMFUpdateKLDivNumba(X:np.ndarray, W:np.ndarray, H:np.ndarray, eps:np.float3
 
     return W, H
 
+# @njit(parallel=True)
+def _NMFUpdateKLDivRegularized(X:np.ndarray, W:np.ndarray, H:np.ndarray, eps:np.float32, alpha=None, beta=None, wPrime=None, hPrime=None, fixBasisFunctions=True, regularization=1e-4) -> tuple[np.ndarray, np.ndarray]:
+    
+    """
+    Computes the NMF updates for W and H with Numba's JIT compiling to be a bit faster.
+    
+    Arguments:
+        X: The data to be decomposed
+        W: The current or randomly initialized W matrix. Can be initialized as a prior
+        H: The current or randomly initialized H matrix. Can be initialized as a prior
+        eps: A float32 non-zero term to prevent division by 0
+        alpha: A scaling prior which scales wPrime before adding it to W during decomposition
+        beta: A scaling prior which scales hPrime before adding it to H during decomposition
+        wPrime: A prior assumption for the W matrix
+        hPrime: A prior assumption for the H matrix
+        
+    Returns:
+        (W, H)
+        W: The basis functions for decomposition
+        H: The activations recovered from decomposition
+    """
+        
+    if fixBasisFunctions:
+        newW = W
+    else:
+        gradW = np.sign(W)
+        WRegularization = np.linalg.norm(W, ord=1)
+        wNumerator = X @ H.T - regularization * gradW * WRegularization
+        wDenominator = W @ H @ H.T
+        
+        newW = W * (wNumerator)/(wDenominator+eps)
+        
+        # Add priors if parameters are set for priors
+        if wPrime is not None and alpha is not None:
+            newW += wPrime * alpha
+        
+        newW = np.maximum(0, newW)
+
+
+    gradH = np.sign(H)
+    HRegularization = np.linalg.norm(H, ord=1)
+
+    hNumerator = W.T @ X - regularization * gradH * HRegularization
+    hDenominator = W.T @ W @ H
+
+    newH = H * (hNumerator)/(hDenominator+eps)
+    
+    # Add priors if parameters are set for priors
+    if hPrime is not None and beta is not None:
+        newH += hPrime * beta
+    
+    newH = np.maximum(newH, 0)
+
+    return newW, newH
+
 
 # @njit
-def decomposeAudio(X, W, H=None, alpha=None, beta=None, wPrime=None, hPrime=None, iterations=2000, eps=1e-5):
+def decomposeAudio(X, W, H=None, alpha=None, beta=None, wPrime=None, hPrime=None, iterations=2000, eps=1e-5, fixBasisFunctions=True, useRegularization=False, regularization=1e-4):
 
     """
     Computes the NMF decomposition for W and H with Numba's JIT compiling to be a bit faster.
@@ -290,11 +346,16 @@ def decomposeAudio(X, W, H=None, alpha=None, beta=None, wPrime=None, hPrime=None
     if H is None: 
         H = np.random.rand(n, samples).astype(np.float32)
     
-    
 
-    
     for i in range(iterations):
-        W, H = _NMFUpdateKLDivNumba(X=X, W=W, H=H, eps=eps, alpha=alpha, beta=beta, wPrime=wPrime, hPrime=hPrime)
+        if useRegularization:
+            W, H = _NMFUpdateKLDivRegularized(X=X, W=W, H=H, eps=eps, alpha=alpha, beta=beta, wPrime=wPrime, hPrime=hPrime, fixBasisFunctions=fixBasisFunctions, regularization=regularization)
+        else:
+            W, H = _NMFUpdateKLDiv(X=X, W=W, H=H, eps=eps, alpha=alpha, beta=beta, wPrime=wPrime, hPrime=hPrime, fixBasisFunctions=fixBasisFunctions)
+
+        distance = np.linalg.norm(X - W @ H, 'fro')
+        if distance < 1e-4:
+            break
 
     print(f'Finished after {i} iterations')
 
@@ -376,12 +437,12 @@ def decomposeAudioSKLearn(X:np.ndarray, W:np.ndarray, H:np.ndarray=None, regular
         n_components=HTransposed.shape[0], # Need to define n_components or it will break, probably a bug
         update_H=False,  # Keep our actual weights W fixed
         init='custom',  # Use custom initialization
-        max_iter=200,
+        max_iter=10,
         solver='cd',
         beta_loss='frobenius',
-        l1_ratio=0.5,
+        l1_ratio=1,
         alpha_W=regularization,
-        tol=1e-5
+        tol=1e-4
     )
     
     print(f'NMF terminated after {niter} iterations')

@@ -15,7 +15,7 @@ data/good-sounds
 !data/good-sounds/README.txt
 
 data/nsynth*
-
+debug-samples/*
 uniform-SR-data/*
 
 __pycache__/

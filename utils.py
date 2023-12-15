@@ -229,3 +229,10 @@ def displayConcatenatedSpectrograms(spectrograms:list, title='Concatenated spect
         
     concatenated = concatenateSpectrograms(spectrograms)
     plt.figure(figsize=(30, 3)), plt.pcolormesh(concatenated), plt.title(title), plt.show()
+    
+# Normalization function
+def minMaxNormalize(X, minVal=None, maxVal=None):
+    if minVal is None or maxVal is None:
+        minVal = np.min(X)
+        maxVal = np.max(X)
+    return (X - minVal) / (maxVal - minVal)

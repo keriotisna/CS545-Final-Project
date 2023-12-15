@@ -4,10 +4,14 @@ import os
 from scipy.signal import stft, istft, check_NOLA # https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.stft.html
 from collections import defaultdict
 from itertools import chain
-from dimensionalityReduction import decomposeAudioSKLearn
+from dimensionalityReduction import decomposeAudioSKLearn, getPCA, decomposeAudio
 from scipy.io import wavfile
 import re
 from utils import *
+from hmmlearn import hmm
+from sklearn.mixture import GaussianMixture
+from sklearn.model_selection import train_test_split
+
 
 # NOTE: Refactor to pull out functions not directly tied to the dataset itself and place them in utils.py
 
@@ -56,7 +60,9 @@ class AudioDataset():
     # A list of bad Nsynth files that are just white noise for some reason. These can be removed in memory without touching the real dataset
     # brass_acoustic_046-084-***.wav to brass_acoustic_046-108-***.wav
     badFilenameRegex = re.compile(r'brass_acoustic_046-(08[4-9]|09[0-9]|10[0-8])-\d{3}\.wav$')
-    BAD_NSYNTH_FILENAMES = [badFilenameRegex]
+    # Filter out plucked strings since they may sound like piano
+    pluckedStringsRegex = re.compile(r'string_acoustic_(012|014|056)-.*-\d{3}\.wav$')
+    BAD_NSYNTH_FILENAMES = [badFilenameRegex, pluckedStringsRegex]
     
     # The color map used for displaying all spectrograms for cheaper printing
     spectrogramCmap = None
@@ -67,7 +73,7 @@ class AudioDataset():
                     'nperseg': 1024,
                     'noverlap': 256, 
                  },
-                 DATA_PATH='data',
+                 DATA_PATH='uniform-SR-data',
                  **kwargs):
         
         """
@@ -115,6 +121,7 @@ class AudioDataset():
                     self._mergeInstruments()
             case 'nsynth-valid':
                 # self._setNsynthValidInstruments(instruments)
+                self.instrumentsToInt = {inst: i for i, inst in enumerate(self.VALID_NSYNTH_VALID_INSTRUMENTS)}
                 self._setDatasetInstruments(instruments=instruments)
                 self.audioData, self.sampleRateDict, self.filenamesDict = getDataset(self.NSYNTH_VALID_TRAINING_DATA_PATH, self.datasetName, self.instruments, toMonoAudio=True, **kwargs)
 
@@ -383,7 +390,7 @@ class AudioDataset():
             validIndices = [i for i in range(len(filenameList)) if isValidFilename(filenameList[i])]
             
             # First, filter based on velocity
-            velocityFilteredIndices = [i for i in validIndices if getInstVel(filenameList[i]) == '100']
+            velocityFilteredIndices = [i for i in validIndices if getInstVel(filenameList[i]) in ['100', '025']]
 
             # Group indices by instrument ID for velocity-filtered data
             idToIndices = {}
@@ -541,7 +548,7 @@ class AudioDataset():
             specs = spectrograms[instName]
             
             concatenated = concatenateSpectrograms(specs)
-            plt.figure(figsize=(30, 3)), plt.pcolormesh(concatenated, cmap=self.spectrogramCmap), plt.title(instName), plt.show()
+            plt.figure(figsize=(30, 3)), plt.pcolormesh(np.log(concatenated+1e-8), cmap=self.spectrogramCmap), plt.title(instName), plt.show()
 
     def getMagnitudeSpectrogram(self, data:np.ndarray, fs:int) -> np.ndarray:
         
@@ -662,6 +669,8 @@ class AudioDataset():
         
         self.spectrograms = {}
         self.phases = {}
+        self.spectrogramLengths = defaultdict(list)
+        
         
         for instrument, currentInstrumentData in self.audioData.items():
             
@@ -669,6 +678,9 @@ class AudioDataset():
             assert len(currentInstrumentData) == len(currentSampleRates)
             spectrograms = []
             phases = []
+
+            for sample in currentInstrumentData:
+                self.spectrogramLengths[instrument].append(self.getMagnitudeSpectrogram(sample, fs=self.getMinSampleRate()).shape[1])
 
             # We will combine all audio data into a single large array, then take the spectrogram all at once
             
@@ -756,6 +768,63 @@ class AudioDataset():
                     
         return allData, indexDict
     
+    def getBasisFunctionsSmall(self, samplesPerSample=5, averageSamples=False) -> tuple[np.ndarray, dict]:
+        
+        """
+        Gets a set of all basis functions from created spectrograms by concatenating them all together. Additionally
+        returns a dictionary containing the length of each instrument's spectrograms so they can be identified later
+        
+        This small version samples an evenly spaced subset of each spectrogram to get much smaller basis functions which may reduce redundant activations.
+
+        Returns:
+            (basisFunctions, indexDict)
+            basisFunctions: A numpy array of shape (DIMS, SAMPLES) which holds the concatenated spectrograms for all instruments in self.spectograms
+            indexDict: A dictionary with keys of instrument names and values of ints which represents how many spectrogram frames are contained by each instrument
+        """
+        
+        indexDict = {}
+        allData = None
+        for instrumentName, data in self.spectrograms.items():
+            
+            lengths = None
+            if hasattr(self, 'spectrogramLengths') and len(data) == 1 and not averageSamples:
+                lengths = self.spectrogramLengths[instrumentName]
+                
+                count = 0
+                newData = []
+                for l in lengths:
+                    newData.append(data[0][:, count:count+l])
+                    count += l
+                data = newData
+            
+            selectedFrames = []
+
+            if averageSamples:
+                for i, sample in enumerate(data):
+                    selectedFrames.append(np.mean(sample, axis=1))
+            else:
+                for i, sample in enumerate(data):
+                    if lengths is not None:
+                        sampleLength = lengths[i]
+                    else:
+                        sampleLength = sample.shape[1]
+                    offset = (sampleLength // samplesPerSample)
+                    
+                    for idx in range(samplesPerSample):
+                        selectedFrames.append(sample[:, idx*offset])
+                
+            concatenatedData = np.array(selectedFrames).T
+            
+            if allData is None:
+                allData = concatenatedData
+            else:
+                allData = np.concatenate((allData, concatenatedData), axis=1)
+                        
+            # Store how long the current data array was so we can navigate it
+            indexDict[instrumentName] = concatenatedData.shape[-1]
+                    
+        return allData, indexDict
+    
     
     # TODO: Try doing several smaller decompositions on segments of the testAudio
     # TODO: Keep looking at spectrogram reconstruction, results still sound wierd, so there HAS to be a bug I'm missing in the conversion back
@@ -808,21 +877,23 @@ class AudioDataset():
 
         fs = self.getMinSampleRate()
 
-        # Combine all spectrogram data into a large array that can be used for NMF as a basis function array. 
-        basisFunctions, indexDict = self.getBasisFunctions() # basisFunctions are float32
+        # Combine all spectrogram data into a large array that can be used for NMF as a basis function array
+        # basisFunctions, indexDict = self.getBasisFunctions() # basisFunctions are float32
+        basisFunctions, indexDict = self.getBasisFunctionsSmall(samplesPerSample=5, averageSamples=False)
 
         # Extract magnitude and phase spectrograms of the test audio for channel separation
         magnitude, phase = self.getMagnitudePhaseSpectrogram(data=testAudio, fs=fs)
         
         if showPlots:
-            plt.figure(figsize=(30, 3)), plt.pcolormesh(magnitude, cmap=self.spectrogramCmap), plt.title('Original data'), plt.show()
-            plt.figure(figsize=(30, 3)), plt.pcolormesh(basisFunctions, cmap=self.spectrogramCmap), plt.title('W_NMF'), plt.show()
+            plt.figure(figsize=(30, 3)), plt.pcolormesh(np.log(magnitude+1e-5), cmap=self.spectrogramCmap), plt.title('Original data'), plt.show()
+            plt.figure(figsize=(30, 3)), plt.pcolormesh(np.log(basisFunctions+1e-5), cmap=self.spectrogramCmap), plt.title('W_NMF'), plt.show()
 
-        # TODO: If we get time priors for H, initialize them here
-        # NOTE: REGULARIZATION HYPERPARAMETER IS VERY IMPORTANT. RESULTS ARE SENSITIVE
-        W_NMF, H_NMF = decomposeAudioSKLearn(X=magnitude, W=basisFunctions, H=None, regularization=nmfRegularization)
+        # W_NMF, H_NMF = decomposeAudioSKLearn(X=magnitude, W=basisFunctions, H=None, regularization=nmfRegularization) # sklearn version is way slower now for some reason
+        # W_NMF, H_NMF = decomposeAudio(X=magnitude, W=basisFunctions, iterations=400, wPrime=basisFunctions, alpha=1e-4, fixBasisFunctions=True, useRegularization=True)
+        W_NMF, H_NMF = decomposeAudio(X=magnitude, W=basisFunctions, iterations=800, wPrime=basisFunctions, alpha=1e-5, fixBasisFunctions=True, useRegularization=True, regularization=nmfRegularization)
 
-        # print(f'Min: {np.min(H_NMF)} Max: {np.max(H_NMF)}')
+
+
         if showPlots:
             plt.figure(figsize=(30, 3)), plt.pcolormesh(H_NMF, cmap=self.spectrogramCmap), plt.title('H_NMF'), plt.show()
                     
@@ -832,29 +903,317 @@ class AudioDataset():
         # Write each isolation back to a int16 .wav file using the istft and normalization
         for idx, isolation in enumerate(isolations):
             assert check_NOLA(**self.getSpectrogramKwargs()), f"ERROR: Current spectrogram kwargs {self.getSpectrogramKwargs()} will not satisfy NOLA condition making inversion impossible!\nSee https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.check_NOLA.html for more info"
-            # print(f'minSpec: {np.min(isolation)} maxSpec: {np.max(isolation)}')
             t, x = istft(isolation, fs=fs, **self.getSpectrogramKwargs())
-
             x = normalizeWAV(x)
             x = convertFloat32toInt16(x)
-            # print(f'minRaw: {np.min(x)} maxRaw: {np.max(x)}')
 
             wavfile.write(f'decompositions\\decomposition{idx}.wav', rate=fs, data=x)
 
+        # Write the reconstruction from NMF to make sure it works
+        reconstruction = (W_NMF @ H_NMF) * np.exp(1j * phase)
+        print(f'minSpec: {np.min(reconstruction)} maxSpec: {np.max(reconstruction)}')
+        t, x = istft(reconstruction, fs=fs, **self.getSpectrogramKwargs())
+
+        x = normalizeWAV(x)
+        x = convertFloat32toInt16(x)
+        print(f'minRaw: {np.min(x)} maxRaw: {np.max(x)}')
+
+        wavfile.write(f'decompositions\\originalReconstruction.wav', rate=fs, data=x)
+
+
+
+    def _predictInstrumentHMM(self, models, sample):
+        
+        bestScore, prediction = float("-inf"), None
+        for instrumentName, model in models.items():
+            score = model.score(sample.T) # DON'T FORGET TO TRANSPOSE
+            if score > bestScore:
+                bestScore = score
+                prediction = instrumentName
+        return prediction
+
+
+    def trainGMMHMMs(self, evaluateOnTrainingData=False, usePCA=True, validateData=False):
+
+        """
+        Trains a GMMHMM for each instrument in the dataset which can be used to try and find priors for activations before decomposition.
+        
+        Arguments:
+            evaluateOnTrainingData: Whether or not to evaluate and print results of training 
+        """
+            
+        models = {}
+
+        basisFunctions, _ = self.getBasisFunctions()
+
+        minX, maxX = np.min(basisFunctions), np.max(basisFunctions)
+
+
+        if usePCA:
+            W_PCA, Z_PCA, xMean, xStd = getPCA(basisFunctions, dims=60)
+            # Store these for later if we need them outside here
+            self.GMMHMMPPCAParameters = (W_PCA, xMean, xStd)
+        else:
+            # basisFunctions = minMaxNormalize(basisFunctions, minVal=minX, maxVal=maxX)
+            basisFunctions = basisFunctions
+
+
+        trainDataset = {}
+        valDataset = {}
+        if validateData:            
+            for instrument, features in self.getSpectrograms().items():
+                featuresClone = features.copy()
+                random.shuffle(featuresClone)
+                
+                splitIdx = int(np.floor(len(featuresClone)*0.8))
+                trainDataset[instrument] = featuresClone[:splitIdx]
+                valDataset[instrument] = featuresClone[splitIdx:]
+
+        if validateData:
+            train = trainDataset
+            validate = valDataset
+        else:
+            train = self.getSpectrograms()
+            validate = train
+
+        print('Training HMMs...')
+        for instrument, features in train.items():
+            print(f'{instrument}, ', end='')
+            # Concatenate all feature vectors for the current instrument
+            if usePCA:
+                X = np.concatenate([W_PCA @ (feature-xMean)/xStd for feature in features], axis=1).T # Transpose because the library is weird
+            else:
+                X = np.concatenate(features, axis=1).T # Transpose because the library is weird
+            lengths = [f.shape[1] for f in features]
+
+            # Create and train a GMMHMM
+            model = hmm.GMMHMM(n_components=6, n_mix=4, covariance_type='diag', n_iter=100)
+            model.fit(X, lengths)
+            models[instrument] = model
+        
+        print(f'\nFinished HMM training!')
+        self.HMMModels = models
+
+        if evaluateOnTrainingData:
+
+            testDataset = []
+            testLabels = []
+            for inst, values in validate.items():
+                if usePCA:
+                    testDataset.extend([W_PCA @ (value-xMean)/xStd for value in values])
+                else:
+                    # testDataset.extend([minMaxNormalize(v, minX, maxX) for v in values])
+                    testDataset.extend(values)
+
+                    
+                testLabels.extend([self.instrumentsToInt[inst]]*len(values))
+                
+            predictions = []
+            for features in testDataset:
+                predictedLabel = self._predictInstrumentHMM(models, features)
+                predictions.append(self.instrumentsToInt[predictedLabel])
+                
+
+            plt.imshow(np.array(testLabels)[np.newaxis, :], aspect='auto'), plt.title('True labels'), plt.show()
+            plt.imshow(np.array(predictions)[np.newaxis, :], aspect='auto'), plt.title('Predicted labels'), plt.show()
+        
+
+    def getHMMPredictions(self, data:np.ndarray, sequenceLength=30, usePCA=True):
+        
+        """
+        Get HMM predictions on what segments of a song have the most prevalent instruments. Will be used for determining activation priors for NMF
+        
+        Arguments:
+            data: A spectrogram of data to evaluate
+        """
+        
+        HMMs = self.HMMModels
+        
+        if usePCA:
+            W_PCA, xMean, xStd = self.GMMHMMPPCAParameters
+            
+        # Split data array into evaluable segments
+        sliceCount = int(np.ceil(data.shape[1] / sequenceLength))
+        # slices = np.hsplit(data, np.arange(sequenceLength, sliceCount * sequenceLength, sequenceLength))
+        
+        if usePCA:
+            slices = [W_PCA @ (data[:, i*sequenceLength:(i+1)*sequenceLength]-xMean)/xStd for i in range(sliceCount)]
+        else:
+            slices = [data[:, i*sequenceLength:(i+1)*sequenceLength] for i in range(sliceCount)]
+
+        
+        outputArray = np.ones_like(data)*-1
+        
+        base = 0
+        for sample in slices:
+            sliceLength = sample.shape[1]
+            prediction = self._predictInstrumentHMM(HMMs, sample=sample)
+
+            outputArray[:, base:base+sliceLength] = self.instrumentsToInt[prediction]
+            base += sliceLength
+        
+        return outputArray
+
+
+    def _predictInstrumentGMM(self, X, models):
+            
+        """
+        Returns a list of ID predictions based on trained GMM models. IDs correspond to instrument ids defined in self.instrumentsToInt
+        """
+            
+        instrumentNames = list(models.keys())
+        scoresList = {}
+
+        for instrumentName, model in models.items():
+            scores = model.score_samples(X.T) # DON'T FORGET TO TRANSPOSE
+            scoresList[instrumentName] = scores
+
+        indexPredictions = np.argmax(np.vstack([s for s in scoresList.values()]).T, axis=1)
+        
+        namePredictions = [instrumentNames[index] for index in indexPredictions]
+        idPredictions = [self.instrumentsToInt[v] for v in namePredictions]
+
+        return idPredictions
+
+
+    def trainGMMs(self, evaluateOnTrainingData=False, usePCA=True, validateData=False):
+        
+        
+        models = {}
+
+        basisFunctions, _ = self.getBasisFunctions()
+        minX, maxX = np.min(basisFunctions), np.max(basisFunctions)
+
+        if usePCA:
+            W_PCA, Z_PCA, xMean, xStd = getPCA(basisFunctions, dims=60)
+            # Store these for later if we need them outside here
+            self.GMMPCAParameters = (W_PCA, xMean, xStd)
+        else:
+            # basisFunctions = minMaxNormalize(basisFunctions, minVal=minX, maxVal=maxX)
+            basisFunctions = basisFunctions
+
+        trainDataset = {}
+        valDataset = {}
+        if validateData:            
+            for instrument, features in self.getSpectrograms().items():
+                featuresClone = features.copy()
+                random.shuffle(featuresClone)
+                
+                splitIdx = int(np.floor(len(featuresClone)*0.8))
+                trainDataset[instrument] = featuresClone[:splitIdx]
+                valDataset[instrument] = featuresClone[splitIdx:]
+
+        if validateData:
+            train = trainDataset
+            validate = valDataset
+        else:
+            train = self.getSpectrograms()
+            validate = train
+
+        print('Training GMMs...')
+        for instrument, features in train.items():
+            print(f'{instrument}, ', end='')
+            # Concatenate all feature vectors for the current instrument
+            if usePCA:
+                X = np.concatenate([W_PCA @ (feature-xMean)/xStd for feature in features], axis=1).T # Transpose because the library is dumb lol
+            else:
+                X = np.concatenate(features, axis=1).T # Transpose because the library is dumb lol
+            lengths = [f.shape[1] for f in features]
+
+            # Create and train a GMM
+            model = GaussianMixture(n_components=16, covariance_type='full')
+            model.fit(X, lengths)
+            models[instrument] = model
+
+        print(f'\nFinished GMM training!')
+
+        self.GMMModels = models
+
+        if evaluateOnTrainingData:
+            testLabels = []
+            for inst, values in validate.items():
+                testLabels.extend([self.instrumentsToInt[inst]]*len(values))
+                
+            if usePCA:
+                basisFunctions = W_PCA @ (basisFunctions-xMean)/xStd
+
+            predictions = self._predictInstrumentGMM(basisFunctions, models)
+            print(np.unique(predictions))
+            plt.imshow(np.array(predictions)[np.newaxis, :], aspect='auto'), plt.title('Predictions'), plt.show()
+            plt.imshow(np.array(testLabels)[np.newaxis, :], aspect='auto'), plt.title('True labels'), plt.show()
 
 
 
 
+    def getGMMPredictions(self, data:np.ndarray, usePCA=True):
+        
+        """
+        Get GMM predictions on what spectrogram frames have the most prevalent instruments. Will be used for determining activation priors for NMF
+        
+        Arguments:
+            data: A spectrogram of data to evaluate
+        """
+
+        if usePCA:
+            W_PCA, xMean, xStd = self.GMMPCAParameters
+            sample = W_PCA @ (data-xMean)/xStd
+        else:
+            sample = data
+        
+        return self._predictInstrumentGMM(sample, models=self.GMMModels)
 
 
 
-
-
-
-
-
-
-
+    def createRandomMixtures(self, mixtureCount, samplesPerMixture=2) -> tuple[list, list, list, list]:
+        
+        """
+        Creates random sound mixtures based on stored audio data
+        
+        Arguments:
+            mixtureCount: How many mixtures to return
+            samplesPerMixture: How many different instrument samples should go into each mixture
+            
+        Returns:
+            (audioMixtures, spectrogramMixtures, audioSeparated, spectrogramSeparated)
+            audioMixtures: The mixed raw audios
+            spectrogramMixtures: The mixted spectrogram representations
+            audioSeparated: Separated audio representations
+            spectrogramSeparated: Separated spectrogram representations
+        """
+        
+        audioMixtures = []
+        spectrogramMixtures = []
+        
+        audioSeparated = []
+        spectrogramSeparated = []
+        
+        possibleAudioSamples = []
+        for group in self.getAudioData().values():
+            possibleAudioSamples.extend(group)
+        
+        for i in range(mixtureCount):
+            
+            randomSamples = random.sample(possibleAudioSamples, k=samplesPerMixture)
+        
+            audioToCombine = []
+            specsToCombine = []
+            
+            for sample in randomSamples:
+        
+                rawData = normalizeWAV(sample)
+                spec = self.getMagnitudeSpectrogram(rawData, fs=self.getMinSampleRate())
+                audioToCombine.append(rawData)
+                specsToCombine.append(spec)
+        
+            audioSeparated.append(audioToCombine)
+            spectrogramSeparated.append(specsToCombine)
+        
+            mixedAudio = normalizeWAV(np.sum(np.array(audioToCombine), axis=0).T)
+            audioMixtures.append(mixedAudio)
+            spectrogramMixtures.append(self.getMagnitudeSpectrogram(mixedAudio, fs=self.getMinSampleRate()))
+            
+        
+        return audioMixtures, spectrogramMixtures, audioSeparated, spectrogramSeparated
 
 
 
